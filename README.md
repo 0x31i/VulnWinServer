@@ -1,5 +1,5 @@
 # VulnWinServer
-An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice.
+An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice. Before the script can be run, initial setup must be performed on a fresh install of Windows Server 2019.
 
 ## On Server 2019
 
