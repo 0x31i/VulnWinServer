@@ -1,7 +1,7 @@
 # VulnWinServer
 An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice. Before the script can be run, initial setup must be performed on a fresh install of Windows Server 2019.
 
-## On Server 2019
+## On Fresh Install of Windows Server 2019
 
 ⚠️ CRITICAL SECURITY WARNING: These configurations are INTENTIONALLY INSECURE and should ONLY be implemented in an isolated lab environment. Never apply these settings to production systems or networks connected to the internet.
 Lab Architecture Overview
