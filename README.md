@@ -63,26 +63,7 @@ Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestar
 "Database=VulnDB;User=sa;Password=sa123" | Out-File "C:\PublicShare\config.ini"
 ```
 
-4. FTP Server Setup
-```powershell
-# Install IIS with FTP
-Install-WindowsFeature -Name Web-Server, Web-Ftp-Server -IncludeManagementTools
-
-# Configure FTP site
-Import-Module WebAdministration
-New-Item -Path "C:\FTPRoot" -ItemType Directory
-New-WebFtpSite -Name "VulnFTP" -Port 21 -PhysicalPath "C:\FTPRoot"
-
-# Allow anonymous authentication
-Set-ItemProperty "IIS:\Sites\VulnFTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-Set-ItemProperty "IIS:\Sites\VulnFTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
-
-# Create weak FTP users
-New-LocalUser -Name "ftpuser" -Password (ConvertTo-SecureString "ftp123" -AsPlainText -Force) -PasswordNeverExpires
-Add-LocalGroupMember -Group "Users" -Member "ftpuser"
-```
-
-5. SSH Server Setup
+4. SSH Server Setup
 ```powershell
 # Install OpenSSH Server
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
