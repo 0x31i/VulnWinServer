@@ -111,9 +111,21 @@ function Create-WeakUsers {
         }
     }
     
-    # Create a user with flag as username
-    $flagUser = New-CTFFlag -Location "Username" -Description "User account with flag as username" -Points 15 -Difficulty "Easy" -Technique "User enumeration"
-    New-LocalUser -Name $flagUser -Password (ConvertTo-SecureString "HiddenUser123!" -AsPlainText -Force) -Description "Can you find me?" -PasswordNeverExpires -ErrorAction SilentlyContinue
+    # Create a user with flag as username (shortened to fit 20 char limit)
+    $shortPokemon = @("PIKA", "MEW", "CHAR", "BULB", "SQUIR", "EEVEE", "DRAGO", "GENGAR")
+    $pokemonIndex = ($global:FlagCounter - 1) % $shortPokemon.Count
+    $selectedPokemon = $shortPokemon[$pokemonIndex]
+    $randomNum = Get-Random -Minimum 1000 -Maximum 9999
+    $flagUserShort = "FLAG{$selectedPokemon$randomNum}"  # e.g., FLAG{PIKA1234} = 15 chars
+    
+    $flagUserDesc = New-CTFFlag -Location "Username" -Description "User account with flag as username: $flagUserShort" -Points 15 -Difficulty "Easy" -Technique "User enumeration"
+    
+    # Create the user with the shortened flag username
+    New-LocalUser -Name $flagUserShort -Password (ConvertTo-SecureString "HiddenUser123!" -AsPlainText -Force) -Description "Can you find me?" -PasswordNeverExpires -ErrorAction SilentlyContinue
+    Write-Host "  Created special user: $flagUserShort" -ForegroundColor Green
+    
+    # Store the actual username in the flag list for reporting
+    $global:FlagList[-1].Flag = $flagUserShort  # Update the flag value to match the actual username
     
     # Enable built-in accounts
     Enable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
@@ -205,6 +217,9 @@ function Configure-DebugPrivileges {
     
     # Create flag for debug privilege abuse
     $debugFlag = New-CTFFlag -Location "Debug Privileges" -Description "Abused SeDebugPrivilege" -Points 40 -Difficulty "Medium" -Technique "Debug privilege abuse"
+    # Create the registry key first
+    New-Item -Path "HKLM:\SOFTWARE" -Name "DebugFlags" -Force -ErrorAction SilentlyContinue | Out-Null
+    # Then create the property
     New-ItemProperty -Path "HKLM:\SOFTWARE\DebugFlags" -Name "Flag" -Value $debugFlag -Force
     
     Write-Host "  Debug privileges configured" -ForegroundColor Green
@@ -353,7 +368,8 @@ Use: mimikatz # lsadump::sam /system:system.hiv /sam:sam.hiv
     # Hidden flag in alternate data stream
     $adsFlag = New-CTFFlag -Location "Alternate Data Stream" -Description "Hidden in ADS of C:\Public\normal.txt" -Points 40 -Difficulty "Hard" -Technique "ADS discovery"
     "This is a normal file" | Out-File "C:\Public\normal.txt"
-    $adsFlag | Out-File "C:\Public\normal.txt:hidden.txt"
+    # Use Set-Content for ADS instead of Out-File
+    Set-Content -Path "C:\Public\normal.txt" -Stream "hidden" -Value $adsFlag
     
     # Enable null sessions
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymous" -Value 0
@@ -680,7 +696,7 @@ function Generate-FlagReport {
     <div class="container">
         <div class="pokemon-theme">
             <h1 style="color: white; border: none;">🎮 Pokemon CTF Flag Report v5 - Windows Server 2019 🎮</h1>
-            <h2 style="color: white;">Mimikatz-Friendly Edition</h2>
+            <h2 style="color: white;">Mimikatz-Friendly Edition (FIXED)</h2>
         </div>
         
         <div class="mimikatz">
@@ -695,13 +711,15 @@ function Generate-FlagReport {
         </div>
         
         <div class="new-vulns">
-            <h3>v5 Features:</h3>
+            <h3>v5 Features (FIXED):</h3>
             <ul>
                 <li><strong>Fixed:</strong> AlwaysInstallElevated registry path creation</li>
+                <li><strong>Fixed:</strong> Username length limitation (FLAG format preserved)</li>
+                <li><strong>Fixed:</strong> Registry key creation for DebugFlags</li>
+                <li><strong>Fixed:</strong> Alternate Data Stream syntax</li>
                 <li><strong>Added:</strong> Mimikatz credential dumping scenarios</li>
                 <li><strong>Added:</strong> Pass-the-Hash attack vectors</li>
                 <li><strong>Added:</strong> Debug privilege abuse paths</li>
-                <li><strong>Removed:</strong> Kerberoasting (replaced with Mimikatz features)</li>
             </ul>
         </div>
         
@@ -801,7 +819,7 @@ mimikatz # lsadump::sam
 }
 
 # Main execution
-Write-Host "`nStarting vulnerable server configuration v5 (Mimikatz Edition)..." -ForegroundColor Cyan
+Write-Host "`nStarting vulnerable server configuration v5 (Mimikatz Edition - FIXED)..." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run all configurations
