@@ -626,7 +626,7 @@ function Create-VulnerableWebApps {
     $vulnPage | Out-File "C:\inetpub\wwwroot\vulnapp\login.html"
     
     # Enable directory browsing
-    Set-WebConfigurationProperty -Filter /system.webServer/directoryBrowse -Name enabled -Value $true -PSPath IIS:\Sites\Default Web Site
+    Set-WebConfigurationProperty -Filter "/system.webServer/directoryBrowse" -Name "enabled" -Value $true -PSPath "IIS:\Sites\Default Web Site"
     
     Write-Host "  Web applications created with flags" -ForegroundColor Green
 }
