@@ -68,6 +68,8 @@ Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestar
 # Install OpenSSH Server
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 
+# RESTART NEEDED - THEN CONTINUE
+
 # Configure SSH
 Start-Service sshd
 Set-Service -Name sshd -StartupType 'Automatic'
