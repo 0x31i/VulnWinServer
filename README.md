@@ -15,66 +15,83 @@ Consider using a pfSense firewall to control lab access
 
 Windows Server 2019 Configuration
 Manual Configuration Steps
-1. Initial Setup
+## 1. Initial Setup
+#### Disable Windows Defender (for lab only)
 ```powershell
-# Disable Windows Defender (for lab only)
 Set-MpPreference -DisableRealtimeMonitoring $true
 New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name DisableAntiSpyware -Value 1 -PropertyType DWORD -Force
+```
 
-# Disable Windows Firewall
+#### Disable Windows Firewall
+```powershell
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+```
 
-# Enable Administrator account with weak password
+#### Enable Administrator account with weak password
+```powershell
 Enable-LocalUser -Name "Administrator"
 Set-LocalUser -Name "Administrator" -Password (ConvertTo-SecureString "Password123!" -AsPlainText -Force)
 ```
 
-2. RDP Configuration (Vulnerable)
-
+## 2. RDP Configuration (Vulnerable)
+#### Enable RDP
 ```powershell
-# Enable RDP
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+```
 
-# Allow unlimited failed login attempts
+#### Allow unlimited failed login attempts
+```powershell
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\RemoteAccess\Parameters\AccountLockout' -Name "MaxDenials" -Value 0
+```
 
-# Disable NLA (Network Level Authentication)
+#### Disable NLA (Network Level Authentication)
+```powershell
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 0
 ```
 
-3. SMB Share Configuration (Vulnerable)
+## 3. SMB Share Configuration (Vulnerable)
+#### Create vulnerable shares
 ```powershell
-# Create vulnerable shares
 New-Item -Path "C:\VulnShare" -ItemType Directory
 New-Item -Path "C:\PublicShare" -ItemType Directory
 New-Item -Path "C:\AdminShare" -ItemType Directory
+```
 
-# Create shares with weak permissions
+#### Create shares with weak permissions
+```powershell
 New-SmbShare -Name "VulnShare" -Path "C:\VulnShare" -FullAccess "Everyone"
 New-SmbShare -Name "PublicShare" -Path "C:\PublicShare" -FullAccess "Everyone"
 New-SmbShare -Name "AdminShare$" -Path "C:\AdminShare" -FullAccess "Everyone"
+```
 
-# Enable SMBv1 (vulnerable protocol)
+#### Enable SMBv1 (vulnerable protocol)
+```powershell
 Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestart
+```
 
-# Place sensitive files
+#### Place sensitive files
+```powershell
 "admin:Password123!" | Out-File "C:\VulnShare\passwords.txt"
 "Database=VulnDB;User=sa;Password=sa123" | Out-File "C:\PublicShare\config.ini"
 ```
 
-4. SSH Server Setup
+## 4. SSH Server Setup
+#### Install OpenSSH Server
 ```powershell
-# Install OpenSSH Server
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+```
 
-# RESTART NEEDED - THEN CONTINUE
+### RESTART NEEDED - THEN CONTINUE
 
-# Configure SSH
+#### Configure SSH
+```powershell
 Start-Service sshd
 Set-Service -Name sshd -StartupType 'Automatic'
+```
 
-# Allow password authentication and root login
+#### Allow password authentication and root login
+```powershell
 $sshdConfig = @"
 PasswordAuthentication yes
 PermitRootLogin yes
@@ -86,9 +103,10 @@ $sshdConfig | Out-File "C:\ProgramData\ssh\sshd_config" -Encoding ascii
 Restart-Service sshd
 ```
 
-# Run Installation Script
-
-
+## Run Installation Script
+```powershell
+cd .\Downloads\
+```
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
