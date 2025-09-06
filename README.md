@@ -16,11 +16,6 @@ Consider using a pfSense firewall to control lab access
 Windows Server 2019 Configuration
 Manual Configuration Steps
 ## 1. Initial Setup
-#### Disable Windows Defender (for lab only)
-```powershell
-Set-MpPreference -DisableRealtimeMonitoring $true
-New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name DisableAntiSpyware -Value 1 -PropertyType DWORD -Force
-```
 
 #### Disable Windows Firewall
 ```powershell
