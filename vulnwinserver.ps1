@@ -897,10 +897,10 @@ Write-Host "Server vulnerability configuration v3 complete!" -ForegroundColor Gr
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "NEW VULNERABILITIES IN v3:" -ForegroundColor Cyan
-Write-Host "  ✓ Unquoted Service Paths (3 services)" -ForegroundColor Yellow
-Write-Host "  ✓ AlwaysInstallElevated MSI" -ForegroundColor Yellow
-Write-Host "  ✓ Print Spooler (PrintNightmare)" -ForegroundColor Yellow
-Write-Host "  ✓ Kerberoasting (svc_mssql, svc_http)" -ForegroundColor Yellow
+Write-Host "  Unquoted Service Paths (3 services)" -ForegroundColor Yellow
+Write-Host "  AlwaysInstallElevated MSI" -ForegroundColor Yellow
+Write-Host "  Print Spooler (PrintNightmare)" -ForegroundColor Yellow
+Write-Host "  Kerberoasting (svc_mssql, svc_http)" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "POKEMON CTF FLAG STATISTICS:" -ForegroundColor Cyan
 Write-Host "  Total Flags Placed: $($global:FlagList.Count)" -ForegroundColor Yellow
