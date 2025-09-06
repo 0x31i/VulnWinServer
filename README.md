@@ -105,7 +105,7 @@ Restart-Service sshd
 
 ## Run Installation Script
 - Open web browser, go to "github.com/0x31i/VulnWinServer"
-- Download the vulnworkstation.ps1 to the downloads folder.
+- Download the vulnwinserver.ps1 to the downloads folder.
 
 ```powershell
 cd .\Downloads\
