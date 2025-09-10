@@ -585,7 +585,7 @@ function Create-VulnerableScheduledTasks {
     $principal = New-ScheduledTaskPrincipal -UserId "admin" -LogonType Password -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     
-    Register-ScheduledTask -TaskName "VulnTask" -Action $action -Trigger $trigger -Settings $settings -User "admin" -Password "admin" -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName "VulnTask" -Action $action -Trigger $trigger -Settings $settings -User "admin" -Password "Administrator2025!" -ErrorAction SilentlyContinue
     
     Write-Host "  Vulnerable scheduled tasks created with flags" -ForegroundColor Green
 }
@@ -850,7 +850,7 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlo
 
 # Store credentials
 cmdkey /add:DC01 /user:Administrator /pass:$LabPassword
-cmdkey /add:FileServer /user:admin /pass:admin
+cmdkey /add:FileServer /user:admin /pass:Administrator2025!
 
 # Enable PowerShell remoting without authentication
 Enable-PSRemoting -Force -SkipNetworkProfileCheck
