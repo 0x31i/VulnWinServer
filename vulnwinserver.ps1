@@ -86,17 +86,17 @@ function Create-WeakUsers {
     Write-Host "Creating vulnerable user accounts with flags..." -ForegroundColor Yellow
     
     # User with flag in description
-    $flag1 = New-CTFFlag -Location "User Description" -Description "Hidden in 'admin' user description" -Points 10 -Difficulty "Easy" -Technique "User enumeration"
+    $flag1 = New-CTFFlag -Location "User Description" -Description "Hidden in user description" -Points 10 -Difficulty "Easy" -Technique "User enumeration"
     
     $users = @(
-        @{Name="admin"; Password="admin"; Groups=@("Administrators"); Description=$flag1},
-        @{Name="user1"; Password="password"; Groups=@("Users"); Description="Standard User"},
-        @{Name="backup"; Password="backup123"; Groups=@("Backup Operators"); Description="Backup Service Account"},
-        @{Name="service"; Password="service"; Groups=@("Users"); Description="Service Account"},
-        @{Name="test"; Password="test"; Groups=@("Users"); Description="Test Account"},
-        @{Name="sqlservice"; Password="sql2019"; Groups=@("Users"); Description="SQL Service Account"},
+        @{Name="admin"; Password="Administrator2025!"; Groups=@("Administrators"); Description=$flag1},
+        @{Name="user1"; Password="Password123!"; Groups=@("Users"); Description="Standard User"},
+        @{Name="backup"; Password="Backupaccount123!"; Groups=@("Backup Operators"); Description="Backup Service Account"},
+        @{Name="service"; Password="ServiceAccount123!"; Groups=@("Users"); Description="Service Account"},
+        @{Name="test"; Password="TestAccount123!"; Groups=@("Users"); Description="Test Account"},
+        @{Name="sqlservice"; Password="SQLservice2019"; Groups=@("Users"); Description="SQL Service Account"},
         @{Name="svc_print"; Password="PrintService123"; Groups=@("Users"); Description="Print Service Account"},
-        @{Name="debugger"; Password="Debug2024!"; Groups=@("Users"); Description="Debug Account for Development"}
+        @{Name="debugger"; Password="Debugger2025!"; Groups=@("Users"); Description="Debug Account for Development"}
     )
     
     foreach ($user in $users) {
@@ -244,8 +244,8 @@ function Configure-PassTheHash {
         # Force password change to ensure hashes are stored
         $password = switch($user) {
             "Administrator" { $LabPassword }
-            "admin" { "admin" }
-            "backup" { "backup123" }
+            "admin" { "Administrator2025!" }
+            "backup" { "Backupaccount123!" }
         }
         Set-LocalUser -Name $user -Password (ConvertTo-SecureString $password -AsPlainText -Force) -ErrorAction SilentlyContinue
     }
@@ -884,9 +884,9 @@ Write-Host "  Total Points Available: $(($global:FlagList | Measure-Object -Prop
 Write-Host ""
 Write-Host "Users for Mimikatz testing:" -ForegroundColor Cyan
 Write-Host "  Administrator: $LabPassword" -ForegroundColor Yellow
-Write-Host "  admin: admin" -ForegroundColor Yellow
-Write-Host "  backup: backup123" -ForegroundColor Yellow
-Write-Host "  debugger: Debug2024! (has debug privs)" -ForegroundColor Yellow
+Write-Host "  admin: Administrator2025!" -ForegroundColor Yellow
+Write-Host "  backup: Backupaccount123!" -ForegroundColor Yellow
+Write-Host "  debugger: Debugger2025! (has debug privs)" -ForegroundColor Yellow
 Write-Host ""
 if ($GenerateFlagReport) {
     Write-Host "Flag reports generated! Check HTML for Mimikatz guide." -ForegroundColor Green
