@@ -72,7 +72,7 @@ Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestar
 
 #### Place sensitive files
 ```powershell
-"admin:Password123!" | Out-File "C:\VulnShare\passwords.txt"
+"Administrator:Password123!" | Out-File "C:\VulnShare\passwords.txt"
 "Database=VulnDB;User=sa;Password=sa123" | Out-File "C:\PublicShare\config.ini"
 ```
 
