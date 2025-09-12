@@ -73,7 +73,9 @@ Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestar
 #### Place sensitive files
 ```powershell
 "Administrator:Password123!" | Out-File "C:\VulnShare\passwords.txt"
-"Database=VulnDB;User=sa;Password=sa123" | Out-File "C:\PublicShare\config.ini"
+"Database=VulnDB;User=sqlservice;Password=SQLservice2019" | Out-File "C:\PublicShare\config.ini"
+"reset-credentials=admin:68076694" | Out-File "C:\AdminShare\printer-info.txt"
+"reset-credentials=root:pass" | Out-File "C:\AdminShare\CCTV-info.txt"
 ```
 
 ## 4. SSH Server Setup
