@@ -89,7 +89,7 @@ function Create-WeakUsers {
     $flag1 = New-CTFFlag -Location "User Description" -Description "Hidden in user description" -Points 10 -Difficulty "Easy" -Technique "User enumeration"
     
     $users = @(
-        @{Name="admin"; Password="Administrator2025!"; Groups=@("Administrators"); Description=$flag1},
+        @{Name="overclock"; Password="Administrator2025!"; Groups=@("Administrators"); Description=$flag1},
         @{Name="user1"; Password="Password123!"; Groups=@("Users"); Description="Standard User"},
         @{Name="backup"; Password="Backupaccount123!"; Groups=@("Backup Operators"); Description="Backup Service Account"},
         @{Name="service"; Password="ServiceAccount123!"; Groups=@("Users"); Description="Service Account"},
@@ -244,7 +244,7 @@ function Configure-PassTheHash {
         # Force password change to ensure hashes are stored
         $password = switch($user) {
             "Administrator" { $LabPassword }
-            "admin" { "Administrator2025!" }
+            "overclock" { "Administrator2025!" }
             "backup" { "Backupaccount123!" }
         }
         Set-LocalUser -Name $user -Password (ConvertTo-SecureString $password -AsPlainText -Force) -ErrorAction SilentlyContinue
@@ -548,7 +548,7 @@ UsePAM no
     # Create SSH keys with flag in authorized_keys comment
     $sshKeyFlag = New-CTFFlag -Location "SSH authorized_keys" -Description "Hidden in SSH authorized_keys" -Points 30 -Difficulty "Medium" -Technique "SSH key enumeration"
     New-Item -Path "C:\ProgramData\ssh\authorized_keys" -ItemType File -Force
-    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 admin@vulnerable # $sshKeyFlag" | Out-File "C:\ProgramData\ssh\authorized_keys"
+    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 overclock@vulnerable # $sshKeyFlag" | Out-File "C:\ProgramData\ssh\authorized_keys"
     
     # Restart SSH
     Restart-Service sshd
@@ -582,10 +582,10 @@ function Create-VulnerableScheduledTasks {
     # Create task with stored credentials that writes flag
     $action = New-ScheduledTaskAction -Execute "C:\Windows\System32\cmd.exe" -Argument "/c echo $taskFlag > C:\Public\taskflag.txt"
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
-    $principal = New-ScheduledTaskPrincipal -UserId "admin" -LogonType Password -RunLevel Highest
+    $principal = New-ScheduledTaskPrincipal -UserId "overclock" -LogonType Password -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     
-    Register-ScheduledTask -TaskName "VulnTask" -Action $action -Trigger $trigger -Settings $settings -User "admin" -Password "Administrator2025!" -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName "VulnTask" -Action $action -Trigger $trigger -Settings $settings -User "overclock" -Password "Administrator2025!" -ErrorAction SilentlyContinue
     
     Write-Host "  Vulnerable scheduled tasks created with flags" -ForegroundColor Green
 }
@@ -844,13 +844,13 @@ Enable-LegacyProtocols
 Write-Host "`nApplying additional misconfigurations..." -ForegroundColor Yellow
 
 # AutoLogon
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultUserName -Value "admin"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultUserName -Value "overclock"
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -Value "Administrator2025!"
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -Value 1
 
 # Store credentials
 cmdkey /add:DC01 /user:Administrator /pass:$LabPassword
-cmdkey /add:FileServer /user:admin /pass:Administrator2025!
+cmdkey /add:FileServer /user:overclock /pass:Administrator2025!
 
 # Enable PowerShell remoting without authentication
 Enable-PSRemoting -Force -SkipNetworkProfileCheck
@@ -884,7 +884,7 @@ Write-Host "  Total Points Available: $(($global:FlagList | Measure-Object -Prop
 Write-Host ""
 Write-Host "Users for Mimikatz testing:" -ForegroundColor Cyan
 Write-Host "  Administrator: $LabPassword" -ForegroundColor Yellow
-Write-Host "  admin: Administrator2025!" -ForegroundColor Yellow
+Write-Host "  overclock: Administrator2025!" -ForegroundColor Yellow
 Write-Host "  backup: Backupaccount123!" -ForegroundColor Yellow
 Write-Host "  debugger: Debugger2025! (has debug privs)" -ForegroundColor Yellow
 Write-Host ""
