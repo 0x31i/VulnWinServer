@@ -62,7 +62,7 @@ New-Item -Path "C:\AdminShare" -ItemType Directory
 ```powershell
 New-SmbShare -Name "VulnShare" -Path "C:\VulnShare" -FullAccess "Everyone"
 New-SmbShare -Name "PublicShare" -Path "C:\PublicShare" -FullAccess "Everyone"
-New-SmbShare -Name "AdminShare$" -Path "C:\AdminShare" -FullAccess "Everyone"
+New-SmbShare -Name "AdminShare$" -Path "C:\AdminShare" -FullAccess "Administrators"
 ```
 
 #### Enable SMBv1 (vulnerable protocol)
