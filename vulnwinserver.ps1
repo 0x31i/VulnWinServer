@@ -1,5 +1,4 @@
-# Windows Server 2019 Vulnerable Lab Configuration Script v5 with Pokemon CTF Flags
-# Mimikatz-Friendly Edition - Optimized for Credential Dumping
+# Windows Server 2019 Vulnerable Lab Configuration Script v5
 # WARNING: FOR ISOLATED LAB ENVIRONMENT ONLY - NEVER USE IN PRODUCTION
 # This script intentionally creates security vulnerabilities and CTF flags for penetration testing practice
 
@@ -11,8 +10,6 @@ param(
 
 Write-Host "==========================================" -ForegroundColor Red
 Write-Host "VULNERABLE LAB CONFIGURATION SCRIPT v5" -ForegroundColor Red
-Write-Host "MIMIKATZ-FRIENDLY EDITION" -ForegroundColor Red
-Write-Host "WITH POKEMON CTF FLAG SYSTEM" -ForegroundColor Red
 Write-Host "FOR EDUCATIONAL PURPOSES ONLY" -ForegroundColor Red
 Write-Host "NEVER USE IN PRODUCTION ENVIRONMENTS" -ForegroundColor Red
 Write-Host "==========================================" -ForegroundColor Red
@@ -673,7 +670,7 @@ function Generate-FlagReport {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CTF Flag Report - Server v5 Mimikatz Edition - $(hostname)</title>
+    <title>CTF Flag Report - Server v5 - $(hostname)</title>
     <style>
         body { font-family: Arial; margin: 20px; background: #f0f0f0; }
         .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }
@@ -695,12 +692,11 @@ function Generate-FlagReport {
 <body>
     <div class="container">
         <div class="pokemon-theme">
-            <h1 style="color: white; border: none;">🎮 Pokemon CTF Flag Report v5 - Windows Server 2019 🎮</h1>
-            <h2 style="color: white;">Mimikatz-Friendly Edition (FIXED)</h2>
+            <h1 style="color: white; border: none;">CTF Flag Report v5 - Windows Server 2019 </h1>
         </div>
         
         <div class="mimikatz">
-            <h3>🔑 Mimikatz-Specific Vulnerabilities:</h3>
+            <h3>Mimikatz-Specific Vulnerabilities:</h3>
             <ul>
                 <li><strong>WDigest Enabled:</strong> Plaintext passwords stored in LSASS memory</li>
                 <li><strong>Debug Privileges:</strong> SeDebugPrivilege granted to non-admin users</li>
@@ -819,7 +815,7 @@ mimikatz # lsadump::sam
 }
 
 # Main execution
-Write-Host "`nStarting vulnerable server configuration v5 (Mimikatz Edition - FIXED)..." -ForegroundColor Cyan
+Write-Host "`nStarting vulnerable server configuration v5 ..." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run all configurations
@@ -878,9 +874,8 @@ Write-Host "  Unquoted Service Paths (3 services)" -ForegroundColor Yellow
 Write-Host "  AlwaysInstallElevated MSI" -ForegroundColor Yellow
 Write-Host "  Print Spooler (PrintNightmare)" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "POKEMON CTF FLAG STATISTICS:" -ForegroundColor Cyan
+Write-Host "FLAG STATISTICS:" -ForegroundColor Cyan
 Write-Host "  Total Flags Placed: $($global:FlagList.Count)" -ForegroundColor Yellow
-Write-Host "  Total Points Available: $(($global:FlagList | Measure-Object -Property Points -Sum).Sum)" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Users for Mimikatz testing:" -ForegroundColor Cyan
 Write-Host "  Administrator: $LabPassword" -ForegroundColor Yellow
