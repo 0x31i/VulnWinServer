@@ -3,9 +3,8 @@ An automation script for configuring a vulnerable Windows 2019 Server for Pentes
 
 ## On Fresh Install of Windows Server 2019
 
-⚠️ CRITICAL SECURITY WARNING ⚠️: These configurations are INTENTIONALLY INSECURE and should ONLY be implemented in an isolated lab environment. Never apply these settings to production systems or networks connected to the internet.
-Lab Architecture Overview
-Let me first outline the lab setup and then provide detailed configuration steps and automation scripts.
+CRITICAL SECURITY WARNING: These configurations are INTENTIONALLY INSECURE and should ONLY be implemented in an isolated lab environment. Never apply these settings to production systems or networks connected to the internet.
+
 Network Isolation Requirements
 
 Use an isolated network segment (separate VLAN or physical network)
@@ -84,7 +83,7 @@ Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestar
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 ```
 
-### ⚠️ RESTART NEEDED - THEN CONTINUE ⚠️
+### RESTART NEEDED - THEN CONTINUE
 
 #### Configure SSH
 ```powershell
