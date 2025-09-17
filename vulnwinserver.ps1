@@ -4,7 +4,7 @@
 
 param(
     [string]$LabPassword = "Password123!",
-    [string]$NetworkPrinter = "192.168.1.230",
+    [string]$NetworkPrinter = "192.168.148.105",
     [switch]$GenerateFlagReport
 )
 
