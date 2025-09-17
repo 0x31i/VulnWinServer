@@ -231,7 +231,7 @@ Welcome to Vulnerable SSH Server
 FLAG{Z************1}
 ```
 
-**🎯 FLAG 18 FOUND**: FLAG{Z**********1} - SSH Banner
+** FLAG 18 FOUND**: FLAG{Z**********1} - SSH Banner
 
 **Why Manual Banner Grabbing?**: Automated tools might miss custom banners or additional information. Direct connection shows exactly what the service presents.
 
@@ -289,7 +289,7 @@ rpcclient $> queryuser admin
         ...
 ```
 
-**🎯 FLAG 1 FOUND**: FLAG{P**********4} - In admin user description
+** FLAG 1 FOUND**: FLAG{P**********4} - In admin user description
 
 **Why Check Descriptions?**: Administrators often use the description field for notes. In production environments, you might find passwords, account purposes, or contact information.
 
@@ -336,7 +336,7 @@ SMB         192.168.148.101 445    WIN-TIP7RVRBJ8E 1000: WIN-TIP7RVRBJ8E\admin (
 SMB         192.168.148.101 445    WIN-TIP7RVRBJ8E 1001: WIN-TIP7RVRBJ8E\FLAG{M******8} (SidTypeUser)
 ```
 
-**🎯 FLAG 2 FOUND**: FLAG{M******8} - Username itself is the flag!
+** FLAG 2 FOUND**: FLAG{M******8} - Username itself is the flag!
 
 **Why RID Cycling?**: Windows assigns Relative Identifiers (RIDs) sequentially. By trying RIDs 500-2000, we can find accounts even if they're hidden from normal enumeration.
 
@@ -379,7 +379,7 @@ SERVICE_NAME: WeakPermService
 DESCRIPTION: Weak Permission Service - FLAG{D************2}
 ```
 
-**🎯 FLAG 20 FOUND**: FLAG{D**********2} - In service description
+** FLAG 20 FOUND**: FLAG{D**********2} - In service description
 
 **Why Check Service Descriptions?**: Services often contain:
 - Version information (for vulnerability research)
@@ -455,7 +455,7 @@ by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
 </html>
 ```
 
-**🎯 FLAG 25 FOUND**: FLAG{A**********3} - In HTML comment
+** FLAG 25 FOUND**: FLAG{A**********3} - In HTML comment
 
 **Critical Finding**: Admin password revealed: `Password123!`
 
@@ -707,7 +707,7 @@ smb: \> exit
 FLAG{D************5}
 ```
 
-**🎯 FLAG 7 FOUND**: FLAG{D**********5} - In Public share
+** FLAG 7 FOUND**: FLAG{D**********5} - In Public share
 
 ### FLAG 8: Backup Share Exploration
 
@@ -737,7 +737,7 @@ Get file sam_backup_info.txt? y
 FLAG{S*************9}
 ```
 
-**🎯 FLAG 8 FOUND**: FLAG{S**********9} - In Backup share
+** FLAG 8 FOUND**: FLAG{S**********9} - In Backup share
 
 ### FLAG 9: IT Share (Requires Admin)
 
@@ -764,7 +764,7 @@ smb: \> get flag.txt
 FLAG{A************7}
 ```
 
-**🎯 FLAG 9 FOUND**: FLAG{A**********7} - In IT share
+** FLAG 9 FOUND**: FLAG{A**********7} - In IT share
 
 ### FLAG 10: Password File Analysis
 
@@ -778,7 +778,7 @@ Administrator:Password123!
 FLAG{M************2}
 ```
 
-**🎯 FLAG 10 FOUND**: FLAG{M**********2} - In password file
+** FLAG 10 FOUND**: FLAG{M**********2} - In password file
 
 ### FLAG 11: SAM Backup Information
 
@@ -794,7 +794,7 @@ Flag: FLAG{G**************5}
 Use: mimikatz # lsadump::sam /system:system.hiv /sam:sam.hiv
 ```
 
-**🎯 FLAG 11 FOUND**: FLAG{G**********5} - SAM backup info
+** FLAG 11 FOUND**: FLAG{G**********5} - SAM backup info
 
 ### FLAG 12: Alternate Data Stream Discovery
 
@@ -823,7 +823,7 @@ more < normal.txt:hidden
 FLAG{L************4}
 ```
 
-**🎯 FLAG 12 FOUND**: FLAG{L**********4} - In Alternate Data Stream
+** FLAG 12 FOUND**: FLAG{L**********4} - In Alternate Data Stream
 
 **Why ADS Matters**: Alternate Data Streams can hide:
 - Malware
@@ -908,7 +908,7 @@ SID               : S-1-5-21-xxx-xxx-xxx-1000
 Special Entry: FLAG{B***********5}
 ```
 
-**🎯 FLAG 3 FOUND**: FLAG{B**********5} - In LSASS memory
+** FLAG 3 FOUND**: FLAG{B**********5} - In LSASS memory
 
 **Why This Works**: Windows stores credentials in LSASS (Local Security Authority Subsystem Service) memory for single sign-on. WDigest (when enabled) stores plaintext passwords!
 
@@ -936,7 +936,7 @@ HKEY_LOCAL_MACHINE\SOFTWARE\DebugFlags
     Flag    REG_SZ    FLAG{S***********9}
 ```
 
-**🎯 FLAG 4 FOUND**: FLAG{S**********9} - Debug privilege flag
+** FLAG 4 FOUND**: FLAG{S**********9} - Debug privilege flag
 
 ### FLAG 5: Pass-the-Hash Attack
 
@@ -964,7 +964,7 @@ C:\Windows\system32> type C:\Windows\System32\config\systemprofile\pth_success.t
 FLAG{M***********9}
 ```
 
-**🎯 FLAG 5 FOUND**: FLAG{M**********9} - Pass-the-Hash success
+** FLAG 5 FOUND**: FLAG{M**********9} - Pass-the-Hash success
 
 **Why PTH Works**: Windows NTLM authentication doesn't require the plaintext password - just the hash. This is why protecting LSASS memory is critical.
 
@@ -1033,7 +1033,7 @@ SERVICE_NAME: VulnScanner
 FLAG{E************0}
 ```
 
-**🎯 FLAG 13 FOUND**: FLAG{E**********0} - Unquoted service path
+** FLAG 13 FOUND**: FLAG{E**********0} - Unquoted service path
 
 ### FLAG 14: CommonAppService Unquoted Path
 
@@ -1054,7 +1054,7 @@ FLAG{E************0}
 FLAG{V***************8}
 ```
 
-**🎯 FLAG 14 FOUND**: FLAG{V**********8} - Unquoted service path 2
+** FLAG 14 FOUND**: FLAG{V**********8} - Unquoted service path 2
 
 ### FLAG 15: VendorUpdater Unquoted Path
 
@@ -1071,7 +1071,7 @@ FLAG{V***************8}
 FLAG{J************0}
 ```
 
-**🎯 FLAG 15 FOUND**: FLAG{J**********0} - Unquoted service path 3
+** FLAG 15 FOUND**: FLAG{J**********0} - Unquoted service path 3
 
 ### FLAG 16: AlwaysInstallElevated
 
@@ -1111,7 +1111,7 @@ HKEY_CURRENT_USER\SOFTWARE\Policies\Microsoft\Windows\Installer
 FLAG{F*************3}
 ```
 
-**🎯 FLAG 16 FOUND**: FLAG{F**********3} - AlwaysInstallElevated
+** FLAG 16 FOUND**: FLAG{F**********3} - AlwaysInstallElevated
 
 ### FLAG 17: Print Spooler Vulnerability
 
@@ -1140,7 +1140,7 @@ C:\Windows\System32\spool\drivers\color Everyone:(OI)(CI)F
 FLAG{A*************2}
 ```
 
-**🎯 FLAG 17 FOUND**: FLAG{A**********2} - Print Spooler flag
+** FLAG 17 FOUND**: FLAG{A**********2} - Print Spooler flag
 
 **Real-World Impact**: This represents the PrintNightmare vulnerability (CVE-2021-34527) which allowed remote code execution on domain controllers!
 
@@ -1172,7 +1172,7 @@ FLAG{A*************2}
 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7... overclock@vulnerable # FLAG{M************7}
 ```
 
-**🎯 FLAG 19 FOUND**: FLAG{M**********7} - In SSH key comment
+** FLAG 19 FOUND**: FLAG{M**********7} - In SSH key comment
 
 ### FLAG 21: Scheduled Task Analysis
 
@@ -1206,7 +1206,7 @@ Execute          : C:\Windows\System32\cmd.exe
 FLAG{M***********4}
 ```
 
-**🎯 FLAG 21 FOUND**: FLAG{M**********4} - Scheduled task output
+** FLAG 21 FOUND**: FLAG{M**********4} - Scheduled task output
 
 ### FLAG 22: Registry HKLM
 
@@ -1221,7 +1221,7 @@ HKEY_LOCAL_MACHINE\SOFTWARE\VulnApp
     LicenseKey    REG_SZ    FLAG{P**********0}
 ```
 
-**🎯 FLAG 22 FOUND**: FLAG{P**********0} - Registry HKLM
+** FLAG 22 FOUND**: FLAG{P**********0} - Registry HKLM
 
 ### FLAG 23: Registry HKCU Run Key
 
@@ -1241,7 +1241,7 @@ HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
 FLAG{A************1}
 ```
 
-**🎯 FLAG 23 FOUND**: FLAG{A**********1} - Registry Run key
+** FLAG 23 FOUND**: FLAG{A**********1} - Registry Run key
 
 ### FLAG 24: Service Registry
 
@@ -1256,7 +1256,7 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VulnScanner
     Flag    REG_SZ    FLAG{P***********9}
 ```
 
-**🎯 FLAG 24 FOUND**: FLAG{P**********9} - Service registry
+** FLAG 24 FOUND**: FLAG{P**********9} - Service registry
 
 ### FLAG 6: RDP Certificate
 
@@ -1271,7 +1271,7 @@ HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Terminal Server
     CertificateComment    REG_SZ    FLAG{G************6}
 ```
 
-**🎯 FLAG 6 FOUND**: FLAG{G**********6} - RDP certificate comment
+** FLAG 6 FOUND**: FLAG{G**********6} - RDP certificate comment
 
 ---
 
