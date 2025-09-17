@@ -1,7 +1,7 @@
 # VulnWinServer
 An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice. Before the script can be run, initial setup must be performed on a fresh install of Windows Server 2019.
 
-## Preperation
+## Preparation
 For learning and testing purposes, Microsoft offers evaluation copies of all their Operating Systems. Legally obtain and install a copy of Windows Server 2019 with the following specifications:
   - Processor: 64bit
   - CPU: Minimum 4 cores allocated
