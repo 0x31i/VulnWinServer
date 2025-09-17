@@ -1,6 +1,14 @@
 # VulnWinServer
 An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice. Before the script can be run, initial setup must be performed on a fresh install of Windows Server 2019.
 
+## Preperation
+For learning and testing purposes, Microsoft offers evaluation copies of all their Operating Systems. Legally obtain and install a copy of Windows Server 2019 with the following specifications:
+  - Processor: 64bit
+  - CPU: Minimum 4 cores allocated
+  - RAM: Minimum 4 GB allocated (ballooning from 4 GB to 8 GB preferred)
+  - Storage: Minimum 60 GB hdd allocated
+
+
 ## On Fresh Install of Windows Server 2019
 
 CRITICAL SECURITY WARNING: These configurations are INTENTIONALLY INSECURE and should ONLY be implemented in an isolated lab environment. Never apply these settings to production systems or networks connected to the internet.
