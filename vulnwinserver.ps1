@@ -697,7 +697,6 @@ function Generate-FlagReport {
         <div class="stats">
             <h2>Statistics</h2>
             <p><strong>Total Flags:</strong> $($global:FlagList.Count)</p>
-            <p><strong>Total Points:</strong> $(($global:FlagList | Measure-Object -Property Points -Sum).Sum)</p>
             <p><strong>Easy Flags:</strong> $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Easy'}).Count)</p>
             <p><strong>Medium Flags:</strong> $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Medium'}).Count)</p>
             <p><strong>Hard Flags:</strong> $(($global:FlagList | Where-Object {$_.Difficulty -eq 'Hard'}).Count)</p>
@@ -828,7 +827,7 @@ Write-Host "  backup: Backupaccount123!" -ForegroundColor Yellow
 Write-Host "  debugger: Debugger2025! (has debug privs)" -ForegroundColor Yellow
 Write-Host ""
 if ($GenerateFlagReport) {
-    Write-Host "Flag reports generated! Check HTML for Mimikatz guide." -ForegroundColor Green
+    Write-Host "Flag reports generated!" -ForegroundColor Green
 }
 Write-Host ""
 Write-Host "REMINDER: This server is now EXTREMELY VULNERABLE!" -ForegroundColor Red
