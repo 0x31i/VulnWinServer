@@ -5,7 +5,13 @@
 param(
     [string]$LabPassword = "Password123!",
     [string]$NetworkPrinter = "192.168.148.105",
-    [switch]$GenerateFlagReport
+    [switch]$GenerateFlagReport,
+    # Best-effort upgrade of the in-box OpenSSH (7.7 on RTM Server 2019) to the
+    # Win32-OpenSSH 8.1+ GitHub release so the SSH banner reports
+    # "OpenSSH_for_Windows_8.1" to match the student walkthrough. Requires
+    # outbound internet during setup; falls back to the in-box capability on
+    # failure. Leave OFF for fully offline builds.
+    [switch]$UpgradeOpenSSH
 )
 
 Write-Host "==========================================" -ForegroundColor Red
@@ -368,80 +374,184 @@ Use: mimikatz # lsadump::sam /system:system.hiv /sam:sam.hiv
     # Use Set-Content for ADS instead of Out-File
     Set-Content -Path "C:\Public\normal.txt" -Stream "hidden" -Value $adsFlag
     
-    # Enable null sessions
-    Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymous" -Value 0
-    Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\LanManServer\Parameters" -Name "RestrictNullSessAccess" -Value 0
+    # --- Enable anonymous / null-session enumeration (FLAGS 1 & 2) ---
+    # The original script only set RestrictAnonymous + RestrictNullSessAccess,
+    # which is NOT enough on Server 2019: rpcclient/enum4linux still get
+    # NT_STATUS_ACCESS_DENIED and SAM/RID enumeration stays blocked. We must
+    # also clear RestrictAnonymousSAM, set EveryoneIncludesAnonymous, expose the
+    # SAMR/LSARPC pipes anonymously, and allow anonymous SID<->name translation.
+    Write-Host "  Enabling null-session / anonymous enumeration..." -ForegroundColor Gray
+    $lsa    = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
+    $lanman = "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters"
+
+    Set-ItemProperty -Path $lsa -Name "RestrictAnonymous"        -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $lsa -Name "RestrictAnonymousSAM"     -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $lsa -Name "EveryoneIncludesAnonymous" -Value 1 -Type DWord -Force
+
+    Set-ItemProperty -Path $lanman -Name "RestrictNullSessAccess" -Value 0 -Type DWord -Force
+    New-ItemProperty  -Path $lanman -Name "NullSessionPipes"  -PropertyType MultiString `
+        -Value @("samr","lsarpc","netlogon","srvsvc","browser","wkssvc","spoolss") -Force | Out-Null
+    New-ItemProperty  -Path $lanman -Name "NullSessionShares" -PropertyType MultiString `
+        -Value @("IPC$") -Force | Out-Null
+
+    # "Network access: Allow anonymous SID/Name translation" = Enabled
+    # (needed for rpcclient lookupsids RID cycling + enum4linux SID resolution).
+    try {
+        secedit /export /cfg C:\Windows\Temp\nullsess.cfg /quiet
+        $cfg = Get-Content C:\Windows\Temp\nullsess.cfg
+        if ($cfg -match "LSAAnonymousNameLookup") {
+            $cfg = $cfg -replace "LSAAnonymousNameLookup\s*=\s*\d", "LSAAnonymousNameLookup = 1"
+        } else {
+            $cfg = $cfg -replace "(\[System Access\])", "`$1`r`nLSAAnonymousNameLookup = 1"
+        }
+        $cfg | Out-File C:\Windows\Temp\nullsess.cfg -Force -Encoding unicode
+        secedit /configure /db C:\Windows\security\local.sdb /cfg C:\Windows\Temp\nullsess.cfg /areas SECURITYPOLICY /quiet
+    } catch {
+        Write-Host "    Warning: could not set LSAAnonymousNameLookup: $_" -ForegroundColor Yellow
+    }
+
+    # Apply the LanmanServer changes without a full reboot.
+    try { Restart-Service -Name LanmanServer -Force -ErrorAction Stop }
+    catch { Write-Host "    LanmanServer restart deferred to final reboot." -ForegroundColor Gray }
+
+    Write-Host "  Null-session enumeration enabled" -ForegroundColor Green
 }
 
 # Function to create multiple unquoted service paths
 function Create-UnquotedServicePaths {
     Write-Host "Creating unquoted service path vulnerabilities with flags..." -ForegroundColor Yellow
-    
-    # Service 1 - Basic unquoted path
+
+    # --- Helper: build one genuinely-exploitable unquoted-path service ---------
+    # The original script was broken two ways (see WINSERVER Flag Review):
+    #   1. The flag was echoed in plaintext INTO scanner.bat, so a student could
+    #      just `type` the file and win without exploiting anything.
+    #   2. The service binPath was a .bat. The SCM can only launch an .exe, so the
+    #      service could never start and the path could never be hijacked.
+    #
+    # Correct design:
+    #   * binPath is UNQUOTED and ends in .exe (so `sc qc` shows the vuln and the
+    #     SCM actually search-walks the path on start).
+    #   * The legitimate target exe is intentionally absent -> the service is
+    #     "broken" until hijacked (normal for this class of vuln).
+    #   * An intermediate directory that sits earlier in the search order is made
+    #     writable by BUILTIN\Users (SID S-1-5-32-545) -> a low-priv student can
+    #     drop their payload .exe there.
+    #   * The reward flag lives in a file readable ONLY by SYSTEM. The student's
+    #     payload, executed as LocalSystem when the service starts, copies it to a
+    #     world-readable location -> the flag is obtainable ONLY by exploiting.
+    function New-UnquotedService {
+        param(
+            [string]$Name, [string]$DisplayName, [string]$Description,
+            [string]$BaseDir,    # made user-writable; the hijack .exe drops HERE
+            [string]$RealDir,    # subdir (with a space) holding the absent legit exe
+            [string]$BinPath,    # UNQUOTED path to the (missing) legit .exe
+            [string]$HijackExe,  # the earlier-search-order file a student plants in $BaseDir
+            [string]$Flag, [string]$FlagBaseName
+        )
+        New-Item -Path $BaseDir -ItemType Directory -Force | Out-Null
+        New-Item -Path $RealDir -ItemType Directory -Force | Out-Null
+
+        # The misconfiguration that makes the unquoted path exploitable: a
+        # low-priv user can write into $BaseDir, which sits EARLIER in the SCM's
+        # space-split search order than the real target in $RealDir. So a planted
+        # $HijackExe in $BaseDir is launched (as LocalSystem) before the real exe.
+        icacls "$BaseDir" /grant "*S-1-5-32-545:(OI)(CI)(M)" | Out-Null
+
+        # Reward flag - SYSTEM-only readable, sitting next to the service so a
+        # low-priv user can SEE the filename but cannot READ it without escalating.
+        # (inheritance:r drops the inherited Users:Modify from $BaseDir above.)
+        $flagFile = Join-Path $BaseDir $FlagBaseName
+        $Flag | Out-File $flagFile -Encoding ascii -Force
+        icacls "$flagFile" /inheritance:r /grant "*S-1-5-18:(R)" "*S-1-5-32-544:(R)" | Out-Null
+
+        # Register the service with an UNQUOTED .exe binPath (no legit exe present).
+        sc.exe create "$Name" binPath= "$BinPath" start= auto DisplayName= "$DisplayName" | Out-Null
+        sc.exe config "$Name" obj= "LocalSystem" | Out-Null
+        sc.exe description "$Name" "$Description" | Out-Null
+        Write-Host "  Created unquoted service: $Name (hijack -> $HijackExe)" -ForegroundColor Green
+    }
+
+    # Service 1 - Basic unquoted path (Easy)
     $unquotedFlag1 = New-CTFFlag -Location "Unquoted Service Path" -Description "Vulnerable Scanner Service exploitation" -Points 25 -Difficulty "Easy" -Technique "Unquoted service path"
-    
-    New-Item -Path "C:\Program Files\Vulnerable Scanner" -ItemType Directory -Force
-    New-Item -Path "C:\Program Files\Vulnerable Scanner\bin" -ItemType Directory -Force
-    "echo $unquotedFlag1 > C:\flag_unquoted1.txt" | Out-File "C:\Program Files\Vulnerable Scanner\bin\scanner.bat"
-    
-    sc.exe create "VulnScanner" binpath= "C:\Program Files\Vulnerable Scanner\bin\scanner.bat" start= auto
-    sc.exe config "VulnScanner" obj= "LocalSystem"
-    sc.exe description "VulnScanner" "Vulnerable Scanner Service - Check for unquoted paths"
-    
-    # Service 2 - More complex path
+    New-UnquotedService -Name "VulnScanner" -DisplayName "Vulnerable Scanner Service" `
+        -Description "Vulnerable Scanner Service - Check for unquoted paths" `
+        -BaseDir "C:\Program Files\Vulnerable Scanner" `
+        -RealDir "C:\Program Files\Vulnerable Scanner\Scanner Service" `
+        -BinPath "C:\Program Files\Vulnerable Scanner\Scanner Service\scanner.exe" `
+        -HijackExe "C:\Program Files\Vulnerable Scanner\Scanner.exe" `
+        -Flag $unquotedFlag1 -FlagBaseName "scanner_flag.txt"
+
+    # Service 2 - More complex path (Medium)
     $unquotedFlag2 = New-CTFFlag -Location "Unquoted Service Path 2" -Description "Common Application Service exploitation" -Points 30 -Difficulty "Medium" -Technique "Unquoted service path"
-    
-    New-Item -Path "C:\Program Files\Common Application\System Tools" -ItemType Directory -Force
-    "echo $unquotedFlag2 > C:\flag_unquoted2.txt" | Out-File "C:\Program Files\Common Application\System Tools\service.exe.bat"
-    
-    sc.exe create "CommonAppService" binpath= "C:\Program Files\Common Application\System Tools\service.exe" start= auto
-    sc.exe config "CommonAppService" obj= "LocalSystem"
-    
-    # Service 3 - Hidden in vendor path
+    New-UnquotedService -Name "CommonAppService" -DisplayName "Common Application Service" `
+        -Description "Common Application Service - background maintenance" `
+        -BaseDir "C:\Program Files\Common Application" `
+        -RealDir "C:\Program Files\Common Application\System Tools" `
+        -BinPath "C:\Program Files\Common Application\System Tools\app service.exe" `
+        -HijackExe "C:\Program Files\Common Application\System.exe" `
+        -Flag $unquotedFlag2 -FlagBaseName "commonapp_flag.txt"
+
+    # Service 3 - Hidden in vendor path (Medium)
     $unquotedFlag3 = New-CTFFlag -Location "Unquoted Service Path 3" -Description "Vendor Update Service exploitation" -Points 35 -Difficulty "Medium" -Technique "Unquoted service path"
-    
-    New-Item -Path "C:\Program Files (x86)\Vendor Software Suite\Update Service" -ItemType Directory -Force
-    "echo $unquotedFlag3 > C:\flag_unquoted3.txt" | Out-File "C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.bat"
-    
-    sc.exe create "VendorUpdater" binpath= "C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.exe" start= auto DisplayName= "Vendor Update Service"
-    sc.exe config "VendorUpdater" obj= "LocalSystem"
-    
-    Write-Host "  Created 3 unquoted service path vulnerabilities with flags" -ForegroundColor Green
+    New-UnquotedService -Name "VendorUpdater" -DisplayName "Vendor Update Service" `
+        -Description "Vendor Update Service - checks for software updates" `
+        -BaseDir "C:\Program Files (x86)\Vendor Software Suite" `
+        -RealDir "C:\Program Files (x86)\Vendor Software Suite\Update Service" `
+        -BinPath "C:\Program Files (x86)\Vendor Software Suite\Update Service\updater.exe" `
+        -HijackExe "C:\Program Files (x86)\Vendor Software Suite\Update.exe" `
+        -Flag $unquotedFlag3 -FlagBaseName "vendor_flag.txt"
+
+    Write-Host "  Created 3 exploitable unquoted service path vulnerabilities with flags" -ForegroundColor Green
 }
 
 # FIXED Function to configure AlwaysInstallElevated
 function Configure-AlwaysInstallElevated {
     Write-Host "Configuring AlwaysInstallElevated vulnerability with flag..." -ForegroundColor Yellow
     
-    # Function to create registry path recursively
-    function Ensure-RegistryPath {
-        param([string]$Path)
-        
-        if (!(Test-Path $Path)) {
-            $parent = Split-Path $Path -Parent
-            $leaf = Split-Path $Path -Leaf
-            
-            if ($parent -and $parent -ne "" -and !(Test-Path $parent)) {
-                Ensure-RegistryPath -Path $parent
-            }
-            
-            if ($parent) {
-                New-Item -Path $parent -Name $leaf -Force -ErrorAction SilentlyContinue | Out-Null
-            }
-        }
+    # ROOT CAUSE of the field failure ("Registry Key not found"):
+    # the original used `Set-ItemProperty ... -PropertyType DWORD`, but
+    # -PropertyType is NOT a parameter of Set-ItemProperty (it belongs to
+    # New-ItemProperty). The call threw a parameter-binding error that the
+    # try/catch swallowed, so the value was never written. Use New-ItemProperty.
+    #
+    # AlwaysInstallElevated requires the DWORD = 1 in BOTH HKLM and HKCU. A
+    # logged-in student is a *different* user hive than whoever ran this script,
+    # so we write HKLM once and then stamp HKCU for the current user, .DEFAULT,
+    # and every local profile's hive (loading NTUSER.DAT where needed).
+    $relPath = "SOFTWARE\Policies\Microsoft\Windows\Installer"
+
+    function Set-AIE {
+        param([string]$RegPath)
+        New-Item -Path $RegPath -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path $RegPath -Name "AlwaysInstallElevated" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue | Out-Null
     }
-    
+
     try {
-        # Create registry paths
-        Ensure-RegistryPath -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer"
-        Ensure-RegistryPath -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer"
-        
-        # Enable AlwaysInstallElevated in both HKLM and HKCU
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer" -Name "AlwaysInstallElevated" -Value 1 -PropertyType DWORD -Force
-        Set-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer" -Name "AlwaysInstallElevated" -Value 1 -PropertyType DWORD -Force
-        
-        Write-Host "  AlwaysInstallElevated enabled successfully" -ForegroundColor Green
-        
+        # Machine-wide (HKLM) + current user (HKCU)
+        Set-AIE "HKLM:\$relPath"
+        Set-AIE "HKCU:\$relPath"
+
+        # Every user hive (loaded + on-disk profiles) so it is set no matter
+        # which lab account the student logs in as.
+        if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+            New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+        }
+        Set-AIE "HKU:\.DEFAULT\$relPath"
+
+        Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.Special -and $_.LocalPath } | ForEach-Object {
+                $sid    = $_.SID
+                $ntuser = Join-Path $_.LocalPath 'NTUSER.DAT'
+                $loaded = Test-Path "HKU:\$sid"
+                if (-not $loaded -and (Test-Path $ntuser)) {
+                    reg load "HKU\$sid" "$ntuser" 2>$null | Out-Null
+                    $justLoaded = $true
+                } else { $justLoaded = $false }
+                if (Test-Path "HKU:\$sid") { Set-AIE "HKU:\$sid\$relPath" }
+                if ($justLoaded) { [gc]::Collect(); Start-Sleep -Milliseconds 200; reg unload "HKU\$sid" 2>$null | Out-Null }
+            }
+
+        Write-Host "  AlwaysInstallElevated enabled (HKLM + all user hives)" -ForegroundColor Green
     } catch {
         Write-Host "  Warning: Could not fully configure AlwaysInstallElevated: $_" -ForegroundColor Yellow
     }
@@ -486,12 +596,30 @@ function Configure-PrintSpoolerVulnerabilities {
     New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "UpdatePromptSettings" -Value 2 -PropertyType DWORD -Force
     New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "RestrictDriverInstallationToAdministrators" -Value 0 -PropertyType DWORD -Force
     
-    # Create writable spool directory
+    # Create writable spool directory.
+    # Field failure: "color has no permissions assigned to Everyone". The
+    # color\ directory is owned by NT SERVICE\TrustedInstaller, and the original
+    # `icacls ... /T` could fail to apply (locked child color profiles abort the
+    # recursive pass, and Administrators may lack WRITE_DAC by inheritance). We
+    # therefore (1) take ownership to Administrators, (2) guarantee Administrators
+    # WRITE_DAC, then (3) grant Everyone via the well-known SID *S-1-1-0 (locale
+    # independent) WITHOUT /T so a single locked child can't abort the grant, and
+    # (4) verify the ACE actually landed.
     $spoolPath = "C:\Windows\System32\spool\drivers\color"
-    New-Item -Path $spoolPath -ItemType Directory -Force -ErrorAction SilentlyContinue
-    icacls $spoolPath /grant "Everyone:(OI)(CI)F" /T
-    
-    # PrintNightmare flag
+    New-Item -Path $spoolPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+    takeown /F "$spoolPath" /A 2>$null | Out-Null
+    icacls "$spoolPath" /grant "*S-1-5-32-544:(OI)(CI)F" | Out-Null   # Administrators full (ensures WRITE_DAC)
+    icacls "$spoolPath" /grant "*S-1-1-0:(OI)(CI)F"       | Out-Null   # Everyone full (the vulnerability)
+
+    if ((icacls "$spoolPath" 2>$null) -match "S-1-1-0|Everyone") {
+        Write-Host "  Everyone:(OI)(CI)F applied to spool\drivers\color" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Everyone ACE did NOT apply to $spoolPath - re-run elevated" -ForegroundColor Red
+    }
+
+    # PrintNightmare flag (placed AFTER the grant so it inherits Everyone:F and is
+    # readable by a low-priv student).
     $spoolerFlag = New-CTFFlag -Location "Print Spooler Exploit" -Description "PrintNightmare exploitation successful" -Points 45 -Difficulty "Hard" -Technique "PrintNightmare/Print Spooler abuse"
     $spoolerFlag | Out-File "$spoolPath\printnightmare_flag.txt" -Force
     
@@ -507,21 +635,52 @@ function Configure-PrintSpoolerVulnerabilities {
 function Configure-VulnerableSSH {
     Write-Host "Installing and configuring vulnerable SSH with flags..." -ForegroundColor Yellow
     
-    # Install OpenSSH Server
-    Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-    
+    # Install OpenSSH Server (in-box capability; usually OpenSSH_for_Windows_7.7
+    # on RTM Server 2019).
+    Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction SilentlyContinue | Out-Null
+
+    # OPTIONAL: upgrade to the Win32-OpenSSH 8.1+ GitHub release so the version
+    # banner reads "OpenSSH_for_Windows_8.1" as the walkthrough shows. Best-effort;
+    # falls back to the in-box build (only the version string differs - the flag
+    # lives in the banner regardless).
+    if ($UpgradeOpenSSH) {
+        try {
+            Write-Host "  Upgrading to Win32-OpenSSH 8.1.0.0p1..." -ForegroundColor Gray
+            Get-Service sshd -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $zip = "$env:TEMP\OpenSSH-Win64.zip"
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/PowerShell/Win32-OpenSSH/releases/download/v8.1.0.0p1-Beta/OpenSSH-Win64.zip" -OutFile $zip
+            Expand-Archive -Path $zip -DestinationPath "C:\Program Files" -Force
+            & "C:\Program Files\OpenSSH-Win64\install-sshd.ps1"
+            $env:Path = "C:\Program Files\OpenSSH-Win64;$env:Path"
+            Write-Host "  OpenSSH 8.1 installed" -ForegroundColor Green
+        } catch {
+            Write-Host "  OpenSSH upgrade failed ($_); keeping in-box version." -ForegroundColor Yellow
+        }
+    }
+
     # Start SSH service
-    Start-Service sshd
+    Start-Service sshd -ErrorAction SilentlyContinue
     Set-Service -Name sshd -StartupType 'Automatic'
-    
+
     # SSH banner flag
     $sshFlag = New-CTFFlag -Location "SSH Banner" -Description "SSH server banner" -Points 10 -Difficulty "Easy" -Technique "Service enumeration"
-    
-    # Configure vulnerable SSH settings with flag in banner
+
+    # Resolve the active ProgramData ssh directory (so it also works after the
+    # Win32-OpenSSH upgrade, which still uses C:\ProgramData\ssh).
+    $sshDir = "C:\ProgramData\ssh"
+    New-Item -Path $sshDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # Configure vulnerable SSH settings with flag in banner.
+    # FIX: the original pointed Banner at the Linux path /etc/ssh/banner.txt which
+    # does not exist on Windows, so the banner (and flag) never loaded. Windows
+    # OpenSSH resolves __PROGRAMDATA__ to C:\ProgramData. We also restore the
+    # `Match Group administrators` block so administrators_authorized_keys is
+    # honored (FLAG 19).
     $sshdConfig = @"
 # Vulnerable SSH Configuration
 Port 22
-Banner /etc/ssh/banner.txt
+Banner __PROGRAMDATA__/ssh/banner.txt
 PasswordAuthentication yes
 PermitRootLogin yes
 PermitEmptyPasswords yes
@@ -535,24 +694,35 @@ TCPKeepAlive yes
 PermitUserEnvironment yes
 Compression yes
 UsePAM no
+Subsystem sftp sftp-server.exe
+
+Match Group administrators
+       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
 "@
-    
-    $sshdConfig | Out-File "C:\ProgramData\ssh\sshd_config" -Encoding ascii -Force
-    
-    # Create banner with flag
-    "Welcome to Vulnerable SSH Server`n$sshFlag" | Out-File "C:\ProgramData\ssh\banner.txt" -Encoding ascii
-    
-    # Create SSH keys with flag in authorized_keys comment
+
+    $sshdConfig | Out-File "$sshDir\sshd_config" -Encoding ascii -Force
+
+    # Create banner with flag. NOTE: SSH sends the Banner directive as a pre-auth
+    # SSH_MSG_USERAUTH_BANNER, which an SSH *client* shows before the password
+    # prompt -- it is NOT visible to raw `nc`. The walkthrough's Flag 18 retrieval
+    # should be `ssh anyuser@<ip>` (see the fix writeup), not netcat.
+    "Welcome to Vulnerable SSH Server`n$sshFlag" | Out-File "$sshDir\banner.txt" -Encoding ascii -Force
+
+    # FLAG 19 - SSH key flag. FIX: write to administrators_authorized_keys (the
+    # file Windows OpenSSH actually uses for members of the Administrators group)
+    # instead of the unused authorized_keys, and apply the strict ACL OpenSSH
+    # requires (SYSTEM + Administrators only) so the key is also functional.
     $sshKeyFlag = New-CTFFlag -Location "SSH authorized_keys" -Description "Hidden in SSH authorized_keys" -Points 30 -Difficulty "Medium" -Technique "SSH key enumeration"
-    New-Item -Path "C:\ProgramData\ssh\authorized_keys" -ItemType File -Force
-    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 overclock@vulnerable # $sshKeyFlag" | Out-File "C:\ProgramData\ssh\authorized_keys"
-    
-    # Restart SSH
-    Restart-Service sshd
-    
+    $adminKeys  = "$sshDir\administrators_authorized_keys"
+    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 overclock@vulnerable # $sshKeyFlag" | Out-File $adminKeys -Encoding ascii -Force
+    icacls "$adminKeys" /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+
+    # Restart SSH so the new config + banner take effect
+    Restart-Service sshd -ErrorAction SilentlyContinue
+
     # Open firewall
-    New-NetFirewallRule -Name sshd -DisplayName 'SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
-    
+    New-NetFirewallRule -Name sshd -DisplayName 'SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue | Out-Null
+
     Write-Host "  SSH server configured with flags" -ForegroundColor Green
 }
 
@@ -637,11 +807,49 @@ function Create-VulnerableWebApps {
 </html>
 "@
     $vulnPage | Out-File "C:\inetpub\wwwroot\vulnapp\login.html"
-    
-    # Enable directory browsing
-    Set-WebConfigurationProperty -Filter "/system.webServer/directoryBrowse" -Name "enabled" -Value $true -PSPath "IIS:\Sites\Default Web Site"
-    
-    Write-Host "  Web applications created with flags" -ForegroundColor Green
+
+    # FLAG 25 discoverability fix. The original relied on gobuster finding
+    # /vulnapp, but "vulnapp" is NOT in dirb's common.txt, so the directory was
+    # never discovered. We make it reliably discoverable two ways:
+    #   1. Enable directory browsing on the site root and remove the default
+    #      document so http://<ip>/ returns a listing that includes vulnapp/.
+    #   2. Drop a root landing page that links to /vulnapp/login.html (and names
+    #      it in an HTML comment) so a `curl http://<ip>/` reveals the path even
+    #      if directory browsing is off.
+    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
+    if (Test-Path $appcmd) {
+        & $appcmd set config "Default Web Site" /section:directoryBrowse /enabled:true | Out-Null
+        # Clear default documents so the directory listing is served at the root.
+        & $appcmd set config "Default Web Site" /section:defaultDocument /enabled:false | Out-Null
+    } else {
+        try {
+            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            Set-WebConfigurationProperty -Filter "/system.webServer/directoryBrowse" -Name "enabled" -Value $true -PSPath "IIS:\Sites\Default Web Site" -ErrorAction SilentlyContinue
+            Set-WebConfigurationProperty -Filter "/system.webServer/defaultDocument" -Name "enabled" -Value $false -PSPath "IIS:\Sites\Default Web Site" -ErrorAction SilentlyContinue
+        } catch { Write-Host "    Warning: could not toggle IIS dirBrowse/defaultDoc: $_" -ForegroundColor Yellow }
+    }
+
+    # Remove the stock IIS splash page so it doesn't mask the listing.
+    Remove-Item "C:\inetpub\wwwroot\iisstart.htm"  -Force -ErrorAction SilentlyContinue
+    Remove-Item "C:\inetpub\wwwroot\iisstart.png"  -Force -ErrorAction SilentlyContinue
+
+    # Root landing page that points at the app (belt-and-suspenders discovery).
+    @"
+<html>
+<head><title>Internal Web Portal</title></head>
+<body>
+<h1>Internal Web Portal</h1>
+<!-- Application moved to /vulnapp/ -->
+<ul>
+  <li><a href="/vulnapp/login.html">Application Login</a></li>
+</ul>
+</body>
+</html>
+"@ | Out-File "C:\inetpub\wwwroot\index.html" -Encoding ascii -Force
+
+    iisreset /restart 2>$null | Out-Null
+
+    Write-Host "  Web applications created with flags (root listing + landing page enabled)" -ForegroundColor Green
 }
 
 # Function to enable legacy protocols
