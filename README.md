@@ -1,129 +1,107 @@
-# VulnWinServer
-An automation script for configuring a vulnerable Windows 2019 Server for Pentesting Practice. Before the script can be run, initial setup must be performed on a fresh install of Windows Server 2019.
+# VulnWinServer: OVERCLOCK Lab (Windows Server 2019)
 
-## Preparation
-For learning and testing purposes, Microsoft offers evaluation copies of all their Operating Systems. Legally obtain and install a copy of Windows Server 2019 with the following specifications:
-  - Processor: 64bit
-  - CPU: Minimum 4 cores allocated
-  - RAM: Minimum 4 GB allocated (ballooning from 4 GB to 8 GB preferred)
-  - Storage: Minimum 60 GB hdd allocated
+A deliberately vulnerable Windows Server 2019 box, one target in the **OVERCLOCK**
+offensive-security lab (the NGS x GCU Hacknet project). A single PowerShell script
+turns a clean Server 2019 VM into a Windows privilege-escalation, service-abuse, and
+credential-dumping range with **32 capture-the-flag objectives**.
 
+> **This box is intentionally insecure.** Build it only on an isolated VM with no
+> route to a production network or the public internet. You are responsible for how
+> and where you run it.
 
-## On Fresh Install of Windows Server 2019
+---
 
-CRITICAL SECURITY WARNING: These configurations are INTENTIONALLY INSECURE and should ONLY be implemented in an isolated lab environment. Never apply these settings to production systems or networks connected to the internet.
+## What you will practice
 
-Network Isolation Requirements
+A member-server attack surface focused on service misconfiguration, SMB, and
+credential theft:
 
-Use an isolated network segment (separate VLAN or physical network)
-Configure host-only or internal network mode if using virtualization
-No direct internet connectivity for vulnerable systems
-Consider using a pfSense firewall to control lab access
+- **Privilege escalation to SYSTEM:** unquoted service paths, modifiable service
+  DACLs, scheduled-task abuse, `AlwaysInstallElevated` MSI abuse.
+- **Enumeration:** service and registry analysis, unquoted-path discovery, SMB
+  share enumeration, RDP and configuration review, alternate-data-stream (ADS)
+  discovery, SSH-key hunting.
+- **Credential access:** Mimikatz `sekurlsa`, SAM database extraction,
+  Pass-the-Hash to admin, backup/file mining, persistence-mechanism review.
 
-Windows Server 2019 Configuration
-Manual Configuration Steps
-## 1. Initial Setup
+**Flags:** 32 total: 12 Easy, 12 Medium, 8 Hard, each mapped to a specific
+technique.
 
-#### Disable Windows Defender (for lab only)
-```powershell
-Set-MpPreference -DisableRealtimeMonitoring $true
+---
+
+## Requirements
+
+| | |
+|---|---|
+| **Target VM** | Windows Server 2019, fresh install, **snapshot it first** |
+| **Resources** | 2+ vCPU, 4 GB+ RAM, 60 GB disk |
+| **Privilege** | Run the build script in an **elevated** PowerShell (Administrator) |
+| **Attacker box** | Kali Linux (or any pentest distro) on the same isolated host-only network |
+| **Networking** | Host-only / internal network. **No internet, no production LAN.** |
+
+---
+
+## Build it
+
+1. Snapshot the clean VM so you can roll back.
+2. Copy `vulnwinserver.ps1` onto the target.
+3. Open **PowerShell as Administrator**:
+
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -Bypass -Force
+   .\vulnwinserver.ps1
+   ```
+
+4. Let it finish, then reboot. The box is ready to attack from Kali.
+
+### Flags and the build seed (important)
+
+Flags look like `FLAG{CODENAME12345678}` and are **derived, never stored**:
+`Select-String "FLAG{"` against the source finds nothing:
+
+```
+flag   = FLAG{ codename + 8 digits }
+digits = HMAC_SHA256( seed , "server::<location>" )   (folded to 8 digits)
 ```
 
-#### Disable Windows Firewall
-```powershell
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-```
+The script reads the seed from **`OC_FLAG_SEED`**:
 
-#### Enable Administrator account with weak password
-```powershell
-Enable-LocalUser -Name "Administrator"
-Set-LocalUser -Name "Administrator" -Password (ConvertTo-SecureString "Password123!" -AsPlainText -Force)
-```
+- **Home / practice (recommended): do nothing.** With no seed set, the script
+  generates a random one, prints it, and builds with it. Save the printed value if
+  you want to check your own answers later.
+- **Reproducible personal build:** `$env:OC_FLAG_SEED = "my-personal-seed"` before
+  running.
 
-## 2. RDP Configuration (Vulnerable)
-#### Enable RDP
-```powershell
-Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-```
+Your home-built flags **will not match the official graded lab**; that instance
+uses a private course seed you do not have. This keeps the box fully playable while
+keeping the official answers uncomputable from this public script.
 
-#### Allow unlimited failed login attempts
-```powershell
-Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\RemoteAccess\Parameters\AccountLockout' -Name "MaxDenials" -Value 0
-```
+---
 
-#### Disable NLA (Network Level Authentication)
-```powershell
-Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 0
-```
+## How to play
 
-## 3. SMB Share Configuration (Vulnerable)
-#### Create vulnerable shares
-```powershell
-New-Item -Path "C:\VulnShare" -ItemType Directory
-New-Item -Path "C:\PublicShare" -ItemType Directory
-New-Item -Path "C:\AdminShare" -ItemType Directory
-```
+| File | Use it when |
+|---|---|
+| `server2019-student-lite.md` | **Hints only**, no answers. |
+| `server2019-hybrid.md` | Hint **plus** a per-flag collapsible reveal. |
+| `server2019-student-walkthrough.md` | Full step-by-step walkthrough. |
+| `server2019-student-walkthrough-wiki.md` | Same content, wiki/portal formatting. |
 
-#### Create shares with weak permissions
-```powershell
-New-SmbShare -Name "VulnShare" -Path "C:\VulnShare" -FullAccess "Everyone"
-New-SmbShare -Name "PublicShare" -Path "C:\PublicShare" -FullAccess "Everyone"
-New-SmbShare -Name "AdminShare$" -Path "C:\AdminShare" -FullAccess "Administrators"
-```
+Start with the lite hints, fall back to the hybrid reveal, confirm with the full
+walkthrough. Flag values in the student writeups are **masked** (`FLAG{S******8}`);
+you submit the real ones recovered from your own box.
 
-#### Enable SMBv1 (vulnerable protocol)
-```powershell
-Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All -NoRestart
-```
+---
 
-#### Place sensitive files
-```powershell
-"Administrator:Password123!" | Out-File "C:\VulnShare\passwords.txt"
-"Database=VulnDB;User=sqlservice;Password=SQLservice2019" | Out-File "C:\PublicShare\config.ini"
-"reset-credentials=admin:68076694" | Out-File "C:\AdminShare\printer-info.txt"
-"reset-credentials=root:pass" | Out-File "C:\AdminShare\CCTV-info.txt"
-```
+## Troubleshooting
 
-## 4. SSH Server Setup
-#### Install OpenSSH Server
-```powershell
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-```
+- **Script blocked:** confirm the elevated shell + the `Set-ExecutionPolicy` line.
+- **A flag will not resolve:** rebuild from the clean snapshot.
+- **Reset the flags:** roll back and rebuild with a different `OC_FLAG_SEED`.
 
-### \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-### RESTART NEEDED - THEN CONTINUE
-### ////////////////////////////////////////////////////////////
+---
 
-#### Configure SSH
-```powershell
-Start-Service sshd
-Set-Service -Name sshd -StartupType 'Automatic'
-```
+## License / use
 
-#### Allow password authentication and root login
-```powershell
-$sshdConfig = @"
-PasswordAuthentication yes
-PermitRootLogin yes
-PermitEmptyPasswords yes
-MaxAuthTries 100
-PubkeyAuthentication yes
-"@
-$sshdConfig | Out-File "C:\ProgramData\ssh\sshd_config" -Encoding ascii
-Restart-Service sshd
-```
-
-## Run Installation Script
-- Open web browser, go to "github.com/0x31i/VulnWinServer"
-- Download the vulnwinserver.ps1 to the downloads folder.
-
-```powershell
-cd .\Downloads\
-```
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-```powershell
-.\vulnwinserver.ps1 -GenerateFlagReport
-```
+For authorized training and education only. Do not deploy on any system or network
+you do not own or have explicit permission to test.

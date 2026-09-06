@@ -1,0 +1,5 @@
+*.bak
+*.bak-*
+*.uncensored
+*.pre-*
+.DS_Store
