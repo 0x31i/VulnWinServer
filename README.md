@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/vulnWinserver-logo.jpg" alt="VulnWinServer" width="820">
+</p>
+
 # VulnWinServer: OVERCLOCK Lab (Windows Server 2019)
 
 A deliberately vulnerable Windows Server 2019 box, one target in the **OVERCLOCK**
